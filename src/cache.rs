@@ -39,13 +39,14 @@ impl CatalogCache {
         }
     }
 
-    fn cache_path(&self, catalog: &Catalog) -> PathBuf {
-        let filename = format!("{}.json", catalog.path.replace('/', "_"));
-        self.cache_dir.join(filename)
+    fn cache_path(&self, source_name: &str, catalog: &Catalog) -> PathBuf {
+        let dir_name = source_name.replace('/', "_").replace(' ', "_");
+        let filename = format!("{}.yaml", catalog.path.replace('/', "_"));
+        self.cache_dir.join("cache").join("sources").join(dir_name).join(filename)
     }
 
-    pub fn is_stale(&self, catalog: &Catalog) -> bool {
-        let path = self.cache_path(catalog);
+    pub fn is_stale(&self, source_name: &str, catalog: &Catalog) -> bool {
+        let path = self.cache_path(source_name, catalog);
         if !path.exists() {
             return true;
         }
@@ -60,24 +61,24 @@ impl CatalogCache {
             >= STALE_THRESHOLD
     }
 
-    pub fn load(&self, catalog: &Catalog) -> Result<Vec<RemoteGame>, CacheError> {
-        let path = self.cache_path(catalog);
+    pub fn load(&self, source_name: &str, catalog: &Catalog) -> Result<Vec<RemoteGame>, CacheError> {
+        let path = self.cache_path(source_name, catalog);
         let contents =
             fs::read_to_string(&path).map_err(|e| CacheError::IoError(e.to_string()))?;
-        serde_json::from_str(&contents).map_err(|e| CacheError::ParseError(e.to_string()))
+        serde_yaml::from_str(&contents).map_err(|e| CacheError::ParseError(e.to_string()))
     }
 
-    pub fn save(&self, catalog: &Catalog, games: &[RemoteGame]) -> Result<(), CacheError> {
-        let path = self.cache_path(catalog);
+    pub fn save(&self, source_name: &str, catalog: &Catalog, games: &[RemoteGame]) -> Result<(), CacheError> {
+        let path = self.cache_path(source_name, catalog);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| CacheError::IoError(e.to_string()))?;
         }
-        let json = serde_json::to_string(games).map_err(|e| CacheError::IoError(e.to_string()))?;
-        fs::write(&path, json).map_err(|e| CacheError::IoError(e.to_string()))
+        let yaml = serde_yaml::to_string(games).map_err(|e| CacheError::IoError(e.to_string()))?;
+        fs::write(&path, yaml).map_err(|e| CacheError::IoError(e.to_string()))
     }
 
-    pub fn invalidate(&self, catalog: &Catalog) -> Result<(), CacheError> {
-        let path = self.cache_path(catalog);
+    pub fn invalidate(&self, source_name: &str, catalog: &Catalog) -> Result<(), CacheError> {
+        let path = self.cache_path(source_name, catalog);
         if path.exists() {
             fs::remove_file(&path).map_err(|e| CacheError::IoError(e.to_string()))?;
         }

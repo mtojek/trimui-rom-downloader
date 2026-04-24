@@ -2006,7 +2006,6 @@ dependencies = [
  "rust-s3",
  "sdl2",
  "serde",
- "serde_json",
  "serde_yaml",
  "tokio",
 ]

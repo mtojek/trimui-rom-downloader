@@ -5,9 +5,8 @@ use crate::config::{Catalog, Source, SourceType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteGame {
-    pub title: String,
     pub key: String,
-    pub file_size: Option<u64>,
+    pub file_size: u64,
 }
 
 #[derive(Debug)]
@@ -113,14 +112,10 @@ impl SourceBackend for S3Backend {
         for result in &results {
             for object in &result.contents {
                 let key = &object.key;
-                let title = key
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(key)
-                    .to_string();
 
                 if letter == '#' {
-                    if let Some(first) = title.chars().next() {
+                    let name = key.rsplit('/').next().unwrap_or(key);
+                    if let Some(first) = name.chars().next() {
                         if first.is_ascii_alphabetic() {
                             continue;
                         }
@@ -128,9 +123,8 @@ impl SourceBackend for S3Backend {
                 }
 
                 games.push(RemoteGame {
-                    title,
                     key: key.clone(),
-                    file_size: Some(object.size),
+                    file_size: object.size,
                 });
             }
         }
