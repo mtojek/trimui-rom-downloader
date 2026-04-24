@@ -42,6 +42,16 @@ impl<'a> MenuScene<'a> {
         MenuScene { state, menu, config, texture_creator }
     }
 
+    pub fn new_at_source(texture_creator: &'a TextureCreator<WindowContext>, config: Config, source_idx: usize) -> Self {
+        let mut scene = Self::new(texture_creator, config);
+        if scene.config.sources[source_idx].catalogs.len() == 1 {
+            scene.transition(State::BrowseSources);
+        } else {
+            scene.transition(State::SourceCatalogs(source_idx));
+        }
+        scene
+    }
+
     fn main_items() -> Vec<MenuItem<MenuTarget>> {
         vec![
             MenuItem { label: "Browse Sources".to_string(), target: Some(MenuTarget::BrowseSources) },
@@ -61,7 +71,7 @@ impl<'a> MenuScene<'a> {
     fn catalog_items(&self, source_idx: usize) -> Vec<MenuItem<MenuTarget>> {
         self.config.sources[source_idx].catalogs.iter().enumerate().map(|(i, catalog)| {
             MenuItem {
-                label: catalog.platform.clone(),
+                label: catalog.path.clone(),
                 target: Some(MenuTarget::Catalog(source_idx, i)),
             }
         }).collect()

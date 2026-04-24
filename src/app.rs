@@ -73,7 +73,9 @@ pub fn run(
                         match scene.handle_input(action) {
                             LoadingOutcome::Cancelled => {
                                 if let Some(cfg) = &config {
-                                    active_scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
+                                    active_scene = ActiveScene::Menu(
+                                        MenuScene::new_at_source(texture_creator, cfg.clone(), scene.source_idx),
+                                    );
                                 }
                             }
                             _ => {}
@@ -83,7 +85,9 @@ pub fn run(
                         match scene.handle_input(action) {
                             BrowserOutcome::Back => {
                                 if let Some(cfg) = &config {
-                                    active_scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
+                                    active_scene = ActiveScene::Menu(
+                                        MenuScene::new_at_source(texture_creator, cfg.clone(), scene.source_idx),
+                                    );
                                 }
                             }
                             BrowserOutcome::Refresh => {
@@ -137,6 +141,7 @@ pub fn run(
                 }
             }
             ActiveScene::Loading(scene) => {
+                let si = scene.source_idx;
                 scene.update(elapsed);
                 scene.render(canvas, elapsed);
                 match scene.check_result() {
@@ -147,7 +152,9 @@ pub fn run(
                     }
                     LoadingOutcome::Cancelled => {
                         if let Some(cfg) = &config {
-                            active_scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
+                            active_scene = ActiveScene::Menu(
+                                MenuScene::new_at_source(texture_creator, cfg.clone(), si),
+                            );
                         }
                     }
                     LoadingOutcome::None => {}
