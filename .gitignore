@@ -24,6 +24,9 @@ target
 # Added by cargo
 /target
 
+# Build artifacts
+ROM Downloader.pak/trimui-rom-downloader
+
 # macOS
 .DS_Store
 

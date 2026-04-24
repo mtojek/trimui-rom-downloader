@@ -1,17 +1,17 @@
 mod background;
+mod input;
 mod intro;
 mod menu;
 mod scene;
 mod text;
 mod texture;
 
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::render::BlendMode;
 use std::time::{Duration, Instant};
 
 use crate::background::Background;
+use crate::input::{InputAction, InputHandler};
 use crate::intro::IntroScene;
 use crate::scene::{Scene, SceneResult};
 
@@ -39,18 +39,14 @@ fn main() {
     let texture_creator = canvas.texture_creator();
     let mut background = Background::new(&texture_creator);
     let mut active_scene = ActiveScene::Intro(IntroScene::new(&texture_creator));
+    let mut input = InputHandler::new(&sdl_context);
     let mut event_pump = sdl_context.event_pump().unwrap();
     let start = Instant::now();
 
     'running: loop {
         for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
-                    ..
-                } => break 'running,
-                _ => {}
+            if matches!(input.handle_event(&event), InputAction::Quit) {
+                break 'running;
             }
         }
 
