@@ -28,7 +28,7 @@ impl State {
     fn legend(&self) -> &str {
         match self {
             State::Main => "Menu: Exit       A: Confirm",
-            State::BrowseSources => "B: Back       A: Confirm",
+            State::BrowseSources => "Menu: Exit       B: Back       A: Confirm",
         }
     }
 

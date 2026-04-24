@@ -89,8 +89,8 @@ impl InputHandler {
                     _ if *which == 0 && *button as i32 == 5 => InputAction::Quit,
                     Button::DPadUp => InputAction::Up,
                     Button::DPadDown => InputAction::Down,
-                    Button::A => InputAction::Confirm,
-                    Button::B => InputAction::Back,
+                    Button::A => InputAction::Back,
+                    Button::B => InputAction::Confirm,
                     _ => InputAction::None,
                 }
             }
