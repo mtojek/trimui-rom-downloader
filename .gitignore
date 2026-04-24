@@ -35,3 +35,6 @@ ROM Downloader.pak/trimui-rom-downloader
 
 # S3 config
 sources.yaml
+
+# Cache
+.rom-downloader/

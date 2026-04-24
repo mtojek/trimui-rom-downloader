@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::config::{Catalog, Source, SourceType};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteGame {
     pub title: String,
     pub key: String,

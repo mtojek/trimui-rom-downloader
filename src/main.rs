@@ -1,6 +1,7 @@
 mod app;
 mod backend;
 mod background;
+mod cache;
 mod config;
 mod error;
 mod input;
