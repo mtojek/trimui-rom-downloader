@@ -5,6 +5,7 @@ mod menu;
 mod scene;
 mod text;
 mod texture;
+mod widget;
 
 use sdl2::pixels::Color;
 use sdl2::render::BlendMode;
@@ -13,6 +14,7 @@ use std::time::{Duration, Instant};
 use crate::background::Background;
 use crate::input::{InputAction, InputHandler};
 use crate::intro::IntroScene;
+use crate::menu::MenuScene;
 use crate::scene::{Scene, SceneResult};
 
 pub const WINDOW_WIDTH: u32 = 1280;
@@ -20,7 +22,7 @@ pub const WINDOW_HEIGHT: u32 = 720;
 
 enum ActiveScene<'a> {
     Intro(IntroScene<'a>),
-    Menu,
+    Menu(MenuScene<'a>),
 }
 
 fn main() {
@@ -45,8 +47,15 @@ fn main() {
 
     'running: loop {
         for event in event_pump.poll_iter() {
-            if matches!(input.handle_event(&event), InputAction::Quit) {
+            let action = input.handle_event(&event);
+            if action == InputAction::Quit {
                 break 'running;
+            }
+            if action != InputAction::None {
+                match &mut active_scene {
+                    ActiveScene::Menu(scene) => scene.handle_input(action),
+                    _ => {}
+                }
             }
         }
 
@@ -57,7 +66,7 @@ fn main() {
 
         let bg_alpha = match &active_scene {
             ActiveScene::Intro(scene) => scene.bg_alpha(elapsed),
-            ActiveScene::Menu => 255,
+            ActiveScene::Menu(_) => 255,
         };
         background.render(&mut canvas, bg_alpha);
 
@@ -66,11 +75,12 @@ fn main() {
                 let result = scene.update(elapsed);
                 scene.render(&mut canvas, elapsed);
                 if matches!(result, SceneResult::Next) {
-                    active_scene = ActiveScene::Menu;
+                    active_scene = ActiveScene::Menu(MenuScene::new(&texture_creator));
                 }
             }
-            ActiveScene::Menu => {
-                // TODO: menu scene rendering
+            ActiveScene::Menu(scene) => {
+                scene.update(elapsed);
+                scene.render(&mut canvas, elapsed);
             }
         }
 

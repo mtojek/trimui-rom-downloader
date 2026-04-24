@@ -4,8 +4,13 @@ use sdl2::joystick::Joystick;
 use sdl2::keyboard::Keycode;
 use sdl2::{GameControllerSubsystem, JoystickSubsystem};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputAction {
     None,
+    Up,
+    Down,
+    Confirm,
+    Back,
     Quit,
 }
 
@@ -63,21 +68,30 @@ impl InputHandler {
         match event {
             Event::Quit { .. } => InputAction::Quit,
 
-            // Desktop: Escape key
             Event::KeyDown {
-                keycode: Some(Keycode::Escape),
-                ..
-            } => InputAction::Quit,
+                keycode: Some(key), ..
+            } => match *key {
+                Keycode::Escape => InputAction::Quit,
+                Keycode::Up => InputAction::Up,
+                Keycode::Down => InputAction::Down,
+                Keycode::Return => InputAction::Confirm,
+                Keycode::Backspace => InputAction::Back,
+                _ => InputAction::None,
+            },
 
-            // TrimUI: Menu button (controller 0, button 5)
             Event::ControllerButtonDown {
                 which, button, ..
             } => {
                 println!("Controller button: which={} button={:?}", which, button);
-                if *which == 0 && *button as i32 == 5 {
-                    InputAction::Quit
-                } else {
-                    InputAction::None
+                use sdl2::controller::Button;
+                match button {
+                    // Menu button (TSP: controller 0, button 5)
+                    _ if *which == 0 && *button as i32 == 5 => InputAction::Quit,
+                    Button::DPadUp => InputAction::Up,
+                    Button::DPadDown => InputAction::Down,
+                    Button::A => InputAction::Confirm,
+                    Button::B => InputAction::Back,
+                    _ => InputAction::None,
                 }
             }
 
@@ -88,7 +102,6 @@ impl InputHandler {
                 InputAction::None
             }
 
-            // Reconnect devices on hotplug
             Event::JoyDeviceAdded { .. } | Event::ControllerDeviceAdded { .. } => {
                 self.open_devices();
                 InputAction::None
