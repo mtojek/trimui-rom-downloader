@@ -29,7 +29,7 @@ pub enum SourceType {
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct Catalog {
-    pub bucket: String,
+    pub path: String,
     pub platform: String,
     pub extract: bool,
 }
@@ -101,9 +101,9 @@ impl Config {
                 ));
             }
             for catalog in &source.catalogs {
-                if catalog.bucket.is_empty() {
+                if catalog.path.is_empty() {
                     return Err(ConfigError::ValidationError(
-                        format!("Source '{}': catalog bucket cannot be empty", source.name),
+                        format!("Source '{}': catalog path cannot be empty", source.name),
                     ));
                 }
                 if catalog.platform.is_empty() {

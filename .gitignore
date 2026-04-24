@@ -32,3 +32,6 @@ ROM Downloader.pak/trimui-rom-downloader
 
 # Claude Code
 .claude/
+
+# S3 config
+sources.yaml

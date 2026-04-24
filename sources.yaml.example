@@ -5,9 +5,9 @@ sources:
     access_key: "your-access-key"
     secret_key: "your-secret-key"
     catalogs:
-      - bucket: "fhw-nes-roms"
+      - path: "fhw-nes-roms"
         platform: "NES"
         extract: true
-      - bucket: "fhw-ps1-roms"
+      - path: "fhw-ps1-roms"
         platform: "PS1"
         extract: true
