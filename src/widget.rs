@@ -15,8 +15,9 @@ const LEGEND_COLOR: Color = Color::RGBA(0, 0, 0, 220);
 const ITEM_SPACING: i32 = 70;
 const LEGEND_BOTTOM_MARGIN: i32 = 12;
 
-pub struct MenuItem {
+pub struct MenuItem<S> {
     pub label: String,
+    pub target: Option<S>,
 }
 
 struct RenderedItem<'a> {
@@ -26,8 +27,9 @@ struct RenderedItem<'a> {
     height: u32,
 }
 
-pub struct Menu<'a> {
+pub struct Menu<'a, S> {
     items: Vec<RenderedItem<'a>>,
+    targets: Vec<Option<S>>,
     legend_texture: Texture<'a>,
     legend_width: u32,
     legend_height: u32,
@@ -35,16 +37,16 @@ pub struct Menu<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum MenuAction {
+pub enum MenuAction<S> {
     None,
-    Selected(usize),
+    Selected(S),
     Back,
 }
 
-impl<'a> Menu<'a> {
+impl<'a, S: Copy> Menu<'a, S> {
     pub fn new(
         texture_creator: &'a TextureCreator<WindowContext>,
-        items: &[MenuItem],
+        items: &[MenuItem<S>],
         legend: &str,
     ) -> Self {
         let text_renderer = TextRenderer::new();
@@ -91,8 +93,11 @@ impl<'a> Menu<'a> {
         );
         let legend_query = legend_texture.query();
 
+        let targets: Vec<Option<S>> = items.iter().map(|item| item.target).collect();
+
         Menu {
             items: rendered_items,
+            targets,
             legend_texture,
             legend_width: legend_query.width,
             legend_height: legend_query.height,
@@ -100,7 +105,7 @@ impl<'a> Menu<'a> {
         }
     }
 
-    pub fn handle_input(&mut self, action: InputAction) -> MenuAction {
+    pub fn handle_input(&mut self, action: InputAction) -> MenuAction<S> {
         match action {
             InputAction::Up => {
                 if self.selected > 0 {
@@ -114,7 +119,13 @@ impl<'a> Menu<'a> {
                 }
                 MenuAction::None
             }
-            InputAction::Confirm => MenuAction::Selected(self.selected),
+            InputAction::Confirm => {
+                if let Some(target) = self.targets[self.selected] {
+                    MenuAction::Selected(target)
+                } else {
+                    MenuAction::None
+                }
+            }
             InputAction::Back => MenuAction::Back,
             _ => MenuAction::None,
         }

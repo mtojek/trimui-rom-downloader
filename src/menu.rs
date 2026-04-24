@@ -5,56 +5,67 @@ use crate::input::InputAction;
 use crate::scene::{Scene, SceneResult};
 use crate::widget::{Menu, MenuAction, MenuItem};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum State {
+    Main,
+    BrowseSources,
+}
+
+impl State {
+    fn items(&self) -> Vec<MenuItem<State>> {
+        match self {
+            State::Main => vec![
+                MenuItem { label: "Browse Sources".to_string(), target: Some(State::BrowseSources) },
+                MenuItem { label: "My Games".to_string(), target: None },
+            ],
+            State::BrowseSources => vec![
+                MenuItem { label: "Source 1".to_string(), target: None },
+                MenuItem { label: "Source 2".to_string(), target: None },
+            ],
+        }
+    }
+
+    fn legend(&self) -> &str {
+        match self {
+            State::Main => "Menu: Exit       A: Confirm",
+            State::BrowseSources => "B: Back       A: Confirm",
+        }
+    }
+
+    fn parent(&self) -> Option<State> {
+        match self {
+            State::BrowseSources => Some(State::Main),
+            _ => None,
+        }
+    }
+}
+
 pub struct MenuScene<'a> {
-    menu_stack: Vec<Menu<'a>>,
+    state: State,
+    menu: Menu<'a, State>,
     texture_creator: &'a TextureCreator<WindowContext>,
 }
 
 impl<'a> MenuScene<'a> {
     pub fn new(texture_creator: &'a TextureCreator<WindowContext>) -> Self {
-        let items = vec![
-            MenuItem {
-                label: "Browse Sources".to_string(),
-            },
-            MenuItem {
-                label: "My Games".to_string(),
-            },
-        ];
+        let state = State::Main;
+        let menu = Menu::new(texture_creator, &state.items(), state.legend());
+        MenuScene { state, menu, texture_creator }
+    }
 
-        let menu = Menu::new(texture_creator, &items, "Menu: Exit       A: Confirm");
-
-        MenuScene {
-            menu_stack: vec![menu],
-            texture_creator,
-        }
+    fn transition(&mut self, new_state: State) {
+        self.state = new_state;
+        self.menu = Menu::new(self.texture_creator, &new_state.items(), new_state.legend());
     }
 
     pub fn handle_input(&mut self, action: InputAction) {
-        let depth = self.menu_stack.len();
-        let menu = self.menu_stack.last_mut().unwrap();
-        match menu.handle_input(action) {
-            MenuAction::Selected(index) => {
-                if depth == 1 && index == 0 {
-                    // Browse Sources
-                    let items = vec![
-                        MenuItem {
-                            label: "Source 1".to_string(),
-                        },
-                        MenuItem {
-                            label: "Source 2".to_string(),
-                        },
-                    ];
-                    let sub = Menu::new(
-                        self.texture_creator,
-                        &items,
-                        "B: Back       A: Confirm",
-                    );
-                    self.menu_stack.push(sub);
-                }
+        match self.menu.handle_input(action) {
+            MenuAction::Selected(next) => {
+                self.transition(next);
             }
             MenuAction::Back => {
-                if self.menu_stack.len() > 1 {
-                    self.menu_stack.pop();
+                if let Some(parent) = self.state.parent() {
+                    self.transition(parent);
                 }
             }
             MenuAction::None => {}
@@ -68,6 +79,6 @@ impl<'a> Scene for MenuScene<'a> {
     }
 
     fn render(&mut self, canvas: &mut Canvas<Window>, _elapsed: u128) {
-        self.menu_stack.last().unwrap().render(canvas);
+        self.menu.render(canvas);
     }
 }
