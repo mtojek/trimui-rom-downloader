@@ -3,7 +3,6 @@ use sdl2::render::{Canvas, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 use std::time::{Duration, Instant};
 
-use crate::backend;
 use crate::background::Background;
 use crate::browser::{BrowserOutcome, GameBrowser};
 use crate::cache::CatalogCache;
@@ -11,6 +10,7 @@ use crate::config::Config;
 use crate::error::ErrorScene;
 use crate::input::{InputAction, InputHandler};
 use crate::intro::IntroScene;
+use crate::loading::{LoadingOutcome, LoadingScene};
 use crate::menu::{MenuOutcome, MenuScene};
 use crate::scene::{Scene, SceneResult};
 
@@ -19,6 +19,7 @@ const CONFIG_PATH: &str = "sources.yaml";
 enum ActiveScene<'a> {
     Intro(IntroScene<'a>),
     Menu(MenuScene<'a>),
+    Loading(LoadingScene<'a>),
     Browser(GameBrowser<'a>),
     Error(ErrorScene<'a>),
 }
@@ -28,6 +29,7 @@ impl<'a> ActiveScene<'a> {
         match self {
             ActiveScene::Intro(s) => s,
             ActiveScene::Menu(s) => s,
+            ActiveScene::Loading(s) => s,
             ActiveScene::Browser(s) => s,
             ActiveScene::Error(s) => s,
         }
@@ -43,7 +45,6 @@ pub fn run(
     let mut background = Background::new(texture_creator);
     let mut active_scene = ActiveScene::Intro(IntroScene::new(texture_creator));
     let mut config: Option<Config> = None;
-    let cache = CatalogCache::new();
     let start = Instant::now();
 
     'running: loop {
@@ -58,49 +59,24 @@ pub fn run(
                         match scene.handle_input(action) {
                             MenuOutcome::OpenGameBrowser { source_idx, catalog_idx } => {
                                 if let Some(cfg) = &config {
-                                    let source = &cfg.sources[source_idx];
-                                    let catalog = &source.catalogs[catalog_idx];
-
-                                    println!("Loading catalog: source='{}' path='{}' platform='{}'",
-                                        source.name, catalog.path, catalog.platform);
-
-                                    let games = if !cache.is_stale(&source.name, catalog) {
-                                        println!("Cache hit, loading from disk");
-                                        let cached = cache.load(&source.name, catalog).unwrap_or_default();
-                                        println!("Cached games: {}", cached.len());
-                                        cached
-                                    } else {
-                                        println!("Cache miss/stale, fetching from S3...");
-                                        println!("Endpoint: {}", source.endpoint);
-                                        match backend::create_backend(source) {
-                                            Ok(be) => {
-                                                match be.list_all_objects(catalog) {
-                                                    Ok(all) => {
-                                                        println!("Fetched {} games from S3", all.len());
-                                                        if let Err(e) = cache.save(&source.name, catalog, &all) {
-                                                            eprintln!("Cache save error: {}", e);
-                                                        }
-                                                        all
-                                                    }
-                                                    Err(e) => {
-                                                        eprintln!("List error: {}", e);
-                                                        Vec::new()
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                eprintln!("Backend error: {}", e);
-                                                Vec::new()
-                                            }
-                                        }
-                                    };
-
-                                    active_scene = ActiveScene::Browser(
-                                        GameBrowser::new(texture_creator, games, catalog.platform.clone()),
+                                    let source = cfg.sources[source_idx].clone();
+                                    let catalog = source.catalogs[catalog_idx].clone();
+                                    active_scene = ActiveScene::Loading(
+                                        LoadingScene::new(texture_creator, source, catalog, CatalogCache::new()),
                                     );
                                 }
                             }
                             MenuOutcome::None => {}
+                        }
+                    }
+                    ActiveScene::Loading(scene) => {
+                        match scene.handle_input(action) {
+                            LoadingOutcome::Cancelled => {
+                                if let Some(cfg) = &config {
+                                    active_scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     ActiveScene::Browser(scene) => {
@@ -145,6 +121,23 @@ pub fn run(
                             ActiveScene::Error(ErrorScene::new(texture_creator, &e.to_string()))
                         }
                     };
+                }
+            }
+            ActiveScene::Loading(scene) => {
+                scene.update(elapsed);
+                scene.render(canvas, elapsed);
+                match scene.check_result() {
+                    LoadingOutcome::Done(games, platform) => {
+                        active_scene = ActiveScene::Browser(
+                            GameBrowser::new(texture_creator, games, platform),
+                        );
+                    }
+                    LoadingOutcome::Cancelled => {
+                        if let Some(cfg) = &config {
+                            active_scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
+                        }
+                    }
+                    LoadingOutcome::None => {}
                 }
             }
             other => {

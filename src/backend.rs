@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use crate::config::{Catalog, Source, SourceType};
 
@@ -26,11 +29,20 @@ impl fmt::Display for BackendError {
 }
 
 pub trait SourceBackend: Send + Sync {
-    fn list_all_objects(&self, catalog: &Catalog) -> Result<Vec<RemoteGame>, BackendError>;
+    fn list_all_objects(
+        &self,
+        catalog: &Catalog,
+        log: &Sender<String>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<Vec<RemoteGame>, BackendError>;
 
     #[allow(dead_code)]
     fn download_object(&self, catalog: &Catalog, key: &str, dest: &str)
     -> Result<(), BackendError>;
+}
+
+fn send_log(log: &Sender<String>, msg: String) {
+    let _ = log.send(msg);
 }
 
 pub fn create_backend(source: &Source) -> Result<Box<dyn SourceBackend>, BackendError> {
@@ -98,7 +110,7 @@ impl S3Backend {
         self.bucket_with_endpoint(&self.endpoint)
     }
 
-    fn resolve_endpoint(&self) -> Result<String, BackendError> {
+    fn resolve_endpoint(&self, log: &Sender<String>) -> Result<String, BackendError> {
         let bucket = self.bucket()?;
 
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -115,34 +127,42 @@ impl S3Backend {
         })?;
 
         let status = response.status_code();
-        println!("Redirect probe status: {}", status);
+        send_log(log, format!("Redirect probe status: {}", status));
 
         if status == 307 || status == 301 || status == 302 {
             let body = String::from_utf8_lossy(response.bytes());
-            println!("Redirect response body: {}", body);
 
             if let Some(start) = body.find("<Endpoint>") {
                 if let Some(end) = body.find("</Endpoint>") {
                     let host = &body[start + 10..end];
                     let resolved = format!("http://{}", host);
-                    println!("Resolved redirect endpoint: {}", resolved);
+                    send_log(log, format!("Resolved endpoint: {}", resolved));
                     return Ok(resolved);
                 }
             }
         }
 
-        println!("No redirect needed");
+        send_log(log, "No redirect needed".to_string());
         Ok(self.endpoint.clone())
     }
 }
 
 impl SourceBackend for S3Backend {
-    fn list_all_objects(&self, catalog: &Catalog) -> Result<Vec<RemoteGame>, BackendError> {
+    fn list_all_objects(
+        &self,
+        catalog: &Catalog,
+        log: &Sender<String>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<Vec<RemoteGame>, BackendError> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BackendError::ListFailed("Cancelled".to_string()));
+        }
+
         let bucket = if self.resolve_redirect {
-            println!("Resolving redirect for endpoint: {}", self.endpoint);
-            let resolved = self.resolve_endpoint()?;
+            send_log(log, format!("Resolving redirect for {}", self.endpoint));
+            let resolved = self.resolve_endpoint(log)?;
             if resolved != self.endpoint {
-                println!("Using resolved endpoint: {}", resolved);
+                send_log(log, format!("Using resolved endpoint: {}", resolved));
                 self.bucket_with_endpoint(&resolved)?
             } else {
                 self.bucket()?
@@ -152,7 +172,11 @@ impl SourceBackend for S3Backend {
         };
         let prefix = format!("{}/", catalog.path);
 
-        println!("S3 list: bucket='{}' prefix='{}'", self.bucket_name, prefix);
+        send_log(log, format!("Listing bucket='{}' prefix='{}'", self.bucket_name, prefix));
+
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BackendError::ListFailed("Cancelled".to_string()));
+        }
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -176,7 +200,7 @@ impl SourceBackend for S3Backend {
             }
         }
 
-        println!("S3 listed {} objects", games.len());
+        send_log(log, format!("Listed {} objects", games.len()));
         Ok(games)
     }
 
