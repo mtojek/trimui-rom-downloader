@@ -24,5 +24,8 @@ target
 # Added by cargo
 /target
 
+# macOS
+.DS_Store
+
 # Claude Code
 .claude/
