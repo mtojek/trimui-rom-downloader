@@ -1,3 +1,4 @@
+mod background;
 mod intro;
 mod menu;
 mod scene;
@@ -7,14 +8,12 @@ mod texture;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
-use sdl2::rect::Rect;
 use sdl2::render::BlendMode;
 use std::time::{Duration, Instant};
 
+use crate::background::Background;
 use crate::intro::IntroScene;
 use crate::scene::{Scene, SceneResult};
-use crate::text::TextRenderer;
-use crate::texture::load_texture;
 
 pub const WINDOW_WIDTH: u32 = 1280;
 pub const WINDOW_HEIGHT: u32 = 720;
@@ -38,24 +37,7 @@ fn main() {
     canvas.set_blend_mode(BlendMode::Blend);
 
     let texture_creator = canvas.texture_creator();
-    let mut bg_texture = load_texture(&texture_creator, include_bytes!("../assets/background.png"));
-
-    let text_renderer = TextRenderer::new();
-    let version_text = format!("ROM Downloader, v{}", env!("CARGO_PKG_VERSION"));
-    let version_texture = text_renderer.render_text(
-        &texture_creator,
-        &version_text,
-        18.0,
-        255, 255, 255, 180,
-    );
-    let version_query = version_texture.query();
-    let version_rect = Rect::new(
-        10,
-        8,
-        version_query.width,
-        version_query.height,
-    );
-
+    let mut background = Background::new(&texture_creator);
     let mut active_scene = ActiveScene::Intro(IntroScene::new(&texture_creator));
     let mut event_pump = sdl_context.event_pump().unwrap();
     let start = Instant::now();
@@ -77,24 +59,11 @@ fn main() {
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
 
-        // background: always rendered, intro controls alpha during fade-in
         let bg_alpha = match &active_scene {
             ActiveScene::Intro(scene) => scene.bg_alpha(elapsed),
             ActiveScene::Menu => 255,
         };
-        bg_texture.set_alpha_mod(bg_alpha);
-        canvas
-            .copy(
-                &bg_texture,
-                None,
-                Rect::new(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT),
-            )
-            .unwrap();
-
-        // version label (bottom-right corner, visible when bg is up)
-        if bg_alpha > 0 {
-            canvas.copy(&version_texture, None, version_rect).unwrap();
-        }
+        background.render(&mut canvas, bg_alpha);
 
         match &mut active_scene {
             ActiveScene::Intro(scene) => {
