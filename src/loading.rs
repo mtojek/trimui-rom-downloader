@@ -28,7 +28,12 @@ const LEGEND_BOTTOM_MARGIN: i32 = 12;
 
 pub enum LoadingOutcome {
     None,
-    Done(Vec<RemoteGame>, String),
+    Done {
+        games: Vec<RemoteGame>,
+        platform: String,
+        source_idx: usize,
+        catalog_idx: usize,
+    },
     Cancelled,
 }
 
@@ -38,6 +43,8 @@ pub struct LoadingScene<'a> {
     cancel: Arc<AtomicBool>,
     handle: Option<JoinHandle<Option<Vec<RemoteGame>>>>,
     platform: String,
+    source_idx: usize,
+    catalog_idx: usize,
     rendered_lines: Vec<(Texture<'a>, u32, u32)>,
     legend_texture: Texture<'a>,
     legend_w: u32,
@@ -52,6 +59,8 @@ impl<'a> LoadingScene<'a> {
         source: Source,
         catalog: Catalog,
         cache: CatalogCache,
+        source_idx: usize,
+        catalog_idx: usize,
     ) -> Self {
         let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -77,6 +86,8 @@ impl<'a> LoadingScene<'a> {
             cancel,
             handle: Some(handle),
             platform,
+            source_idx,
+            catalog_idx,
             rendered_lines: Vec::new(),
             legend_texture: legend,
             legend_w: lq.width,
@@ -172,7 +183,12 @@ impl<'a> LoadingScene<'a> {
             if let Some(handle) = self.handle.take() {
                 match handle.join() {
                     Ok(Some(games)) if !self.cancel.load(Ordering::Relaxed) => {
-                        return LoadingOutcome::Done(games, self.platform.clone());
+                        return LoadingOutcome::Done {
+                            games,
+                            platform: self.platform.clone(),
+                            source_idx: self.source_idx,
+                            catalog_idx: self.catalog_idx,
+                        };
                     }
                     _ => return LoadingOutcome::Cancelled,
                 }

@@ -62,7 +62,7 @@ pub fn run(
                                     let source = cfg.sources[source_idx].clone();
                                     let catalog = source.catalogs[catalog_idx].clone();
                                     active_scene = ActiveScene::Loading(
-                                        LoadingScene::new(texture_creator, source, catalog, CatalogCache::new()),
+                                        LoadingScene::new(texture_creator, source, catalog, CatalogCache::new(), source_idx, catalog_idx),
                                     );
                                 }
                             }
@@ -84,6 +84,19 @@ pub fn run(
                             BrowserOutcome::Back => {
                                 if let Some(cfg) = &config {
                                     active_scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
+                                }
+                            }
+                            BrowserOutcome::Refresh => {
+                                if let Some(cfg) = &config {
+                                    let si = scene.source_idx;
+                                    let ci = scene.catalog_idx;
+                                    let source = cfg.sources[si].clone();
+                                    let catalog = source.catalogs[ci].clone();
+                                    let cache = CatalogCache::new();
+                                    let _ = cache.invalidate(&source.name, &catalog);
+                                    active_scene = ActiveScene::Loading(
+                                        LoadingScene::new(texture_creator, source, catalog, cache, si, ci),
+                                    );
                                 }
                             }
                             BrowserOutcome::None => {}
@@ -127,9 +140,9 @@ pub fn run(
                 scene.update(elapsed);
                 scene.render(canvas, elapsed);
                 match scene.check_result() {
-                    LoadingOutcome::Done(games, platform) => {
+                    LoadingOutcome::Done { games, platform, source_idx, catalog_idx } => {
                         active_scene = ActiveScene::Browser(
-                            GameBrowser::new(texture_creator, games, platform),
+                            GameBrowser::new(texture_creator, games, platform, source_idx, catalog_idx),
                         );
                     }
                     LoadingOutcome::Cancelled => {

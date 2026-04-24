@@ -35,6 +35,7 @@ const LEGEND_COLOR: Color = Color::RGBA(0, 0, 0, 220);
 pub enum BrowserOutcome {
     None,
     Back,
+    Refresh,
 }
 
 struct RenderedGame<'a> {
@@ -55,6 +56,8 @@ pub struct GameBrowser<'a> {
     games: Vec<RemoteGame>,
     #[allow(dead_code)]
     platform: String,
+    pub source_idx: usize,
+    pub catalog_idx: usize,
     letter_idx: usize,
     selected: usize,
     scroll_offset: usize,
@@ -79,6 +82,8 @@ impl<'a> GameBrowser<'a> {
         texture_creator: &'a TextureCreator<WindowContext>,
         all_games: Vec<RemoteGame>,
         platform: String,
+        source_idx: usize,
+        catalog_idx: usize,
     ) -> Self {
         let text = TextRenderer::new();
 
@@ -111,7 +116,7 @@ impl<'a> GameBrowser<'a> {
         }
 
         let legend = text.render_text(texture_creator,
-            "Menu: Exit       L1/R1: Letter       B: Back",
+            "Menu: Exit    L1/R1: Letter    B: Back    Y: Refresh",
             LEGEND_FONT_SIZE,
             LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a);
         let lq = legend.query();
@@ -119,6 +124,8 @@ impl<'a> GameBrowser<'a> {
         let mut browser = GameBrowser {
             games: all_games,
             platform,
+            source_idx,
+            catalog_idx,
             letter_idx: 0,
             selected: 0,
             scroll_offset: 0,
@@ -237,6 +244,7 @@ impl<'a> GameBrowser<'a> {
                 BrowserOutcome::None
             }
             InputAction::Back => BrowserOutcome::Back,
+            InputAction::Refresh => BrowserOutcome::Refresh,
             _ => BrowserOutcome::None,
         }
     }
