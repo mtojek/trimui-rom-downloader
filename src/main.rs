@@ -1,6 +1,7 @@
 mod intro;
 mod menu;
 mod scene;
+mod text;
 mod texture;
 
 use sdl2::event::Event;
@@ -12,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::intro::IntroScene;
 use crate::scene::{Scene, SceneResult};
+use crate::text::TextRenderer;
 use crate::texture::load_texture;
 
 pub const WINDOW_WIDTH: u32 = 1280;
@@ -37,6 +39,22 @@ fn main() {
 
     let texture_creator = canvas.texture_creator();
     let mut bg_texture = load_texture(&texture_creator, include_bytes!("../assets/background.png"));
+
+    let text_renderer = TextRenderer::new();
+    let version_text = format!("ROM Downloader, v{}", env!("CARGO_PKG_VERSION"));
+    let version_texture = text_renderer.render_text(
+        &texture_creator,
+        &version_text,
+        18.0,
+        255, 255, 255, 180,
+    );
+    let version_query = version_texture.query();
+    let version_rect = Rect::new(
+        10,
+        8,
+        version_query.width,
+        version_query.height,
+    );
 
     let mut active_scene = ActiveScene::Intro(IntroScene::new(&texture_creator));
     let mut event_pump = sdl_context.event_pump().unwrap();
@@ -72,6 +90,11 @@ fn main() {
                 Rect::new(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT),
             )
             .unwrap();
+
+        // version label (bottom-right corner, visible when bg is up)
+        if bg_alpha > 0 {
+            canvas.copy(&version_texture, None, version_rect).unwrap();
+        }
 
         match &mut active_scene {
             ActiveScene::Intro(scene) => {
