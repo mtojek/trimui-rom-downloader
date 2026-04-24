@@ -12,6 +12,8 @@ const BG_FADE_START_MS: u128 = 1000;  // tło: starts 700ms after krab
 const BG_FADE_IN_MS: u128 = 1000;     // tło: fade-in 1000ms
 const CART_START_MS: u128 = 2200;     // cart: starts after bg is done (BG_FADE_START + BG_FADE_IN + 200ms pause)
 const CART_SLIDE_MS: u128 = 600;      // cart: slide down duration
+const EXIT_START_MS: u128 = 3600;    // exit: 800ms after cart arrives (2800 + 800)
+const EXIT_SLIDE_MS: u128 = 600;     // exit: slide out duration
 
 fn load_texture<'a>(
     creator: &'a sdl2::render::TextureCreator<sdl2::video::WindowContext>,
@@ -44,22 +46,30 @@ fn main() {
 
     let texture_creator = canvas.texture_creator();
     let mut bg_texture = load_texture(&texture_creator, "assets/background.png");
-    let mut crab_texture = load_texture(&texture_creator, "assets/sprite-crab.png");
+    let mut crab_front_texture = load_texture(&texture_creator, "assets/sprite-crab-front.png");
+    let mut crab_back_texture = load_texture(&texture_creator, "assets/sprite-crab-back.png");
     let cart_texture = load_texture(&texture_creator, "assets/sprite-cart.png");
 
-    let crab_query = crab_texture.query();
-    let crab_w = (crab_query.width as f32 * 0.9) as u32;
-    let crab_h = (crab_query.height as f32 * 0.9) as u32;
-    let crab_x = (WINDOW_WIDTH as i32 - crab_w as i32) / 2;
-    let crab_y = (WINDOW_HEIGHT as i32 - crab_h as i32) / 2 + 50;
-    let crab_rect = Rect::new(crab_x, crab_y, crab_w, crab_h);
+    let crab_front_query = crab_front_texture.query();
+    let crab_front_w = (crab_front_query.width as f32 * 0.9) as u32;
+    let crab_front_h = (crab_front_query.height as f32 * 0.9) as u32;
+    let crab_front_x = (WINDOW_WIDTH as i32 - crab_front_w as i32) / 2;
+    let crab_front_y = (WINDOW_HEIGHT as i32 - crab_front_h as i32) / 2 + 50;
+    let crab_front_rect = Rect::new(crab_front_x, crab_front_y, crab_front_w, crab_front_h);
+
+    let crab_back_query = crab_back_texture.query();
+    let crab_back_w = (crab_back_query.width as f32 * 0.9) as u32;
+    let crab_back_h = (crab_back_query.height as f32 * 0.9) as u32;
+    let crab_back_x = (WINDOW_WIDTH as i32 - crab_back_w as i32) / 2;
+    let crab_back_y = (WINDOW_HEIGHT as i32 - crab_back_h as i32) / 2 - 50;
+    let crab_back_rect = Rect::new(crab_back_x, crab_back_y, crab_back_w, crab_back_h);
 
     let cart_query = cart_texture.query();
     let cart_w = (cart_query.width as f32 * 0.45) as u32;
     let cart_h = (cart_query.height as f32 * 0.45) as u32;
-    let cart_x = (WINDOW_WIDTH as i32 - cart_w as i32) / 2 + 10;
+    let cart_x = (WINDOW_WIDTH as i32 - cart_w as i32) / 2 + 7;
     // cart slides from above crab down to just above crab (in crab's claws)
-    let cart_y_final = crab_y - cart_h as i32 + 20 + 75; // overlap slightly with crab, +75px down
+    let cart_y_final = crab_front_y - cart_h as i32 + 20 + 75; // overlap slightly with crab, +75px down
     let cart_y_start = -(cart_h as i32); // starts off-screen top
 
     let mut event_pump = sdl_context.event_pump().unwrap();
@@ -92,6 +102,15 @@ fn main() {
             (t * 255.0) as u8
         };
 
+        // exit offset: all sprites slide down together
+        let exit_offset = if elapsed < EXIT_START_MS {
+            0
+        } else {
+            let t = ((elapsed - EXIT_START_MS).min(EXIT_SLIDE_MS) as f32) / EXIT_SLIDE_MS as f32;
+            let eased = t * t; // ease-in: accelerate as it leaves
+            (WINDOW_HEIGHT as f32 * 1.5 * eased) as i32
+        };
+
         // cart: slides down from top after CART_START_MS
         let cart_visible = elapsed >= CART_START_MS;
         let cart_y = if !cart_visible {
@@ -100,7 +119,7 @@ fn main() {
             let t = ((elapsed - CART_START_MS).min(CART_SLIDE_MS) as f32) / CART_SLIDE_MS as f32;
             // ease-out: decelerate as it arrives
             let eased = 1.0 - (1.0 - t) * (1.0 - t);
-            cart_y_start + ((cart_y_final - cart_y_start) as f32 * eased) as i32
+            cart_y_start + ((cart_y_final - cart_y_start) as f32 * eased) as i32 + exit_offset
         };
 
         canvas.set_draw_color(Color::RGB(0, 0, 0));
@@ -116,7 +135,12 @@ fn main() {
             )
             .unwrap();
 
-        // cart (behind crab, slides down from top, rotated 20° right)
+        // crab-back (behind cart)
+        crab_back_texture.set_alpha_mod(crab_alpha);
+        let crab_back_rect_anim = Rect::new(crab_back_rect.x(), crab_back_rect.y() + exit_offset, crab_back_rect.width(), crab_back_rect.height());
+        canvas.copy(&crab_back_texture, None, crab_back_rect_anim).unwrap();
+
+        // cart (between crab layers, slides down from top, rotated 7°)
         if cart_visible {
             canvas
                 .copy_ex(
@@ -131,9 +155,10 @@ fn main() {
                 .unwrap();
         }
 
-        // krab (on top of cart)
-        crab_texture.set_alpha_mod(crab_alpha);
-        canvas.copy(&crab_texture, None, crab_rect).unwrap();
+        // crab-front (on top of cart)
+        crab_front_texture.set_alpha_mod(crab_alpha);
+        let crab_front_rect_anim = Rect::new(crab_front_rect.x(), crab_front_rect.y() + exit_offset, crab_front_rect.width(), crab_front_rect.height());
+        canvas.copy(&crab_front_texture, None, crab_front_rect_anim).unwrap();
 
         canvas.present();
         std::thread::sleep(Duration::from_millis(16));
