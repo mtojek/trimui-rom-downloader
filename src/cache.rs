@@ -1,6 +1,6 @@
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use crate::backend::RemoteGame;
@@ -77,6 +77,7 @@ impl CatalogCache {
         fs::write(&path, yaml).map_err(|e| CacheError::IoError(e.to_string()))
     }
 
+    #[allow(dead_code)]
     pub fn invalidate(&self, source_name: &str, catalog: &Catalog) -> Result<(), CacheError> {
         let path = self.cache_path(source_name, catalog);
         if path.exists() {

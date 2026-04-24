@@ -3,13 +3,13 @@ use std::fmt;
 use std::path::Path;
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub sources: Vec<Source>,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Source {
     pub name: String,
     #[serde(rename = "type")]
@@ -18,16 +18,25 @@ pub struct Source {
     pub access_key: String,
     pub secret_key: String,
     pub catalogs: Vec<Catalog>,
+    #[serde(default)]
+    pub options: SourceOptions,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SourceOptions {
+    #[serde(default)]
+    pub resolve_redirect: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceType {
     S3,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Catalog {
     pub path: String,
     pub platform: String,

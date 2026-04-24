@@ -3,12 +3,15 @@ use sdl2::render::{Canvas, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 use std::time::{Duration, Instant};
 
+use crate::backend;
 use crate::background::Background;
+use crate::browser::{BrowserOutcome, GameBrowser};
+use crate::cache::CatalogCache;
 use crate::config::Config;
 use crate::error::ErrorScene;
 use crate::input::{InputAction, InputHandler};
 use crate::intro::IntroScene;
-use crate::menu::MenuScene;
+use crate::menu::{MenuOutcome, MenuScene};
 use crate::scene::{Scene, SceneResult};
 
 const CONFIG_PATH: &str = "sources.yaml";
@@ -16,6 +19,7 @@ const CONFIG_PATH: &str = "sources.yaml";
 enum ActiveScene<'a> {
     Intro(IntroScene<'a>),
     Menu(MenuScene<'a>),
+    Browser(GameBrowser<'a>),
     Error(ErrorScene<'a>),
 }
 
@@ -24,6 +28,7 @@ impl<'a> ActiveScene<'a> {
         match self {
             ActiveScene::Intro(s) => s,
             ActiveScene::Menu(s) => s,
+            ActiveScene::Browser(s) => s,
             ActiveScene::Error(s) => s,
         }
     }
@@ -37,6 +42,8 @@ pub fn run(
 ) {
     let mut background = Background::new(texture_creator);
     let mut active_scene = ActiveScene::Intro(IntroScene::new(texture_creator));
+    let mut config: Option<Config> = None;
+    let cache = CatalogCache::new();
     let start = Instant::now();
 
     'running: loop {
@@ -46,8 +53,67 @@ pub fn run(
                 break 'running;
             }
             if action != InputAction::None {
-                if let ActiveScene::Menu(scene) = &mut active_scene {
-                    scene.handle_input(action);
+                match &mut active_scene {
+                    ActiveScene::Menu(scene) => {
+                        match scene.handle_input(action) {
+                            MenuOutcome::OpenGameBrowser { source_idx, catalog_idx } => {
+                                if let Some(cfg) = &config {
+                                    let source = &cfg.sources[source_idx];
+                                    let catalog = &source.catalogs[catalog_idx];
+
+                                    println!("Loading catalog: source='{}' path='{}' platform='{}'",
+                                        source.name, catalog.path, catalog.platform);
+
+                                    let games = if !cache.is_stale(&source.name, catalog) {
+                                        println!("Cache hit, loading from disk");
+                                        let cached = cache.load(&source.name, catalog).unwrap_or_default();
+                                        println!("Cached games: {}", cached.len());
+                                        cached
+                                    } else {
+                                        println!("Cache miss/stale, fetching from S3...");
+                                        println!("Endpoint: {}", source.endpoint);
+                                        match backend::create_backend(source) {
+                                            Ok(be) => {
+                                                match be.list_all_objects(catalog) {
+                                                    Ok(all) => {
+                                                        println!("Fetched {} games from S3", all.len());
+                                                        if let Err(e) = cache.save(&source.name, catalog, &all) {
+                                                            eprintln!("Cache save error: {}", e);
+                                                        }
+                                                        all
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("List error: {}", e);
+                                                        Vec::new()
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("Backend error: {}", e);
+                                                Vec::new()
+                                            }
+                                        }
+                                    };
+
+                                    active_scene = ActiveScene::Browser(
+                                        GameBrowser::new(texture_creator, games, catalog.platform.clone()),
+                                    );
+                                }
+                            }
+                            MenuOutcome::None => {}
+                        }
+                    }
+                    ActiveScene::Browser(scene) => {
+                        match scene.handle_input(action) {
+                            BrowserOutcome::Back => {
+                                if let Some(cfg) = &config {
+                                    active_scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
+                                }
+                            }
+                            BrowserOutcome::None => {}
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -69,7 +135,11 @@ pub fn run(
                 scene.render(canvas, elapsed);
                 if matches!(result, SceneResult::Next) {
                     active_scene = match Config::load(CONFIG_PATH) {
-                        Ok(_config) => ActiveScene::Menu(MenuScene::new(texture_creator)),
+                        Ok(cfg) => {
+                            let scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
+                            config = Some(cfg);
+                            scene
+                        }
                         Err(e) => {
                             eprintln!("{}", e);
                             ActiveScene::Error(ErrorScene::new(texture_creator, &e.to_string()))

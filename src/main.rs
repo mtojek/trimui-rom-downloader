@@ -1,6 +1,7 @@
 mod app;
 mod backend;
 mod background;
+mod browser;
 mod cache;
 mod config;
 mod error;

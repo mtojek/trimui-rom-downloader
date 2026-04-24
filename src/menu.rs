@@ -1,74 +1,120 @@
 use sdl2::render::{Canvas, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 
+use crate::config::Config;
 use crate::input::InputAction;
 use crate::scene::{Scene, SceneResult};
 use crate::widget::{Menu, MenuAction, MenuItem};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+enum MenuTarget {
+    BrowseSources,
+    Source(usize),
+    Catalog(usize, usize),
+}
+
+impl Copy for MenuTarget {}
+
+#[derive(Debug, Clone, PartialEq)]
 enum State {
     Main,
     BrowseSources,
+    SourceCatalogs(usize),
 }
 
-impl State {
-    fn items(&self) -> Vec<MenuItem<State>> {
-        match self {
-            State::Main => vec![
-                MenuItem { label: "Browse Sources".to_string(), target: Some(State::BrowseSources) },
-                MenuItem { label: "My Games".to_string(), target: None },
-            ],
-            State::BrowseSources => vec![
-                MenuItem { label: "Source 1".to_string(), target: None },
-                MenuItem { label: "Source 2".to_string(), target: None },
-            ],
-        }
-    }
-
-    fn legend(&self) -> &str {
-        match self {
-            State::Main => "Menu: Exit       A: Confirm",
-            State::BrowseSources => "Menu: Exit       B: Back       A: Confirm",
-        }
-    }
-
-    fn parent(&self) -> Option<State> {
-        match self {
-            State::BrowseSources => Some(State::Main),
-            _ => None,
-        }
-    }
+pub enum MenuOutcome {
+    None,
+    OpenGameBrowser { source_idx: usize, catalog_idx: usize },
 }
 
 pub struct MenuScene<'a> {
     state: State,
-    menu: Menu<'a, State>,
+    menu: Menu<'a, MenuTarget>,
+    config: Config,
     texture_creator: &'a TextureCreator<WindowContext>,
 }
 
 impl<'a> MenuScene<'a> {
-    pub fn new(texture_creator: &'a TextureCreator<WindowContext>) -> Self {
+    pub fn new(texture_creator: &'a TextureCreator<WindowContext>, config: Config) -> Self {
         let state = State::Main;
-        let menu = Menu::new(texture_creator, &state.items(), state.legend());
-        MenuScene { state, menu, texture_creator }
+        let items = Self::main_items();
+        let menu = Menu::new(texture_creator, &items, "Menu: Exit       A: Confirm");
+        MenuScene { state, menu, config, texture_creator }
+    }
+
+    fn main_items() -> Vec<MenuItem<MenuTarget>> {
+        vec![
+            MenuItem { label: "Browse Sources".to_string(), target: Some(MenuTarget::BrowseSources) },
+            MenuItem { label: "My Games".to_string(), target: None },
+        ]
+    }
+
+    fn source_items(&self) -> Vec<MenuItem<MenuTarget>> {
+        self.config.sources.iter().enumerate().map(|(i, source)| {
+            MenuItem {
+                label: source.name.clone(),
+                target: Some(MenuTarget::Source(i)),
+            }
+        }).collect()
+    }
+
+    fn catalog_items(&self, source_idx: usize) -> Vec<MenuItem<MenuTarget>> {
+        self.config.sources[source_idx].catalogs.iter().enumerate().map(|(i, catalog)| {
+            MenuItem {
+                label: catalog.platform.clone(),
+                target: Some(MenuTarget::Catalog(source_idx, i)),
+            }
+        }).collect()
     }
 
     fn transition(&mut self, new_state: State) {
+        let (items, legend) = match &new_state {
+            State::Main => (Self::main_items(), "Menu: Exit       A: Confirm"),
+            State::BrowseSources => (self.source_items(), "Menu: Exit       B: Back       A: Confirm"),
+            State::SourceCatalogs(_) => (self.catalog_items(match &new_state {
+                State::SourceCatalogs(i) => *i,
+                _ => unreachable!(),
+            }), "Menu: Exit       B: Back       A: Confirm"),
+        };
         self.state = new_state;
-        self.menu = Menu::new(self.texture_creator, &new_state.items(), new_state.legend());
+        self.menu = Menu::new(self.texture_creator, &items, legend);
     }
 
-    pub fn handle_input(&mut self, action: InputAction) {
+    fn parent(&self) -> Option<State> {
+        match &self.state {
+            State::BrowseSources => Some(State::Main),
+            State::SourceCatalogs(_) => Some(State::BrowseSources),
+            _ => None,
+        }
+    }
+
+    pub fn handle_input(&mut self, action: InputAction) -> MenuOutcome {
         match self.menu.handle_input(action) {
-            MenuAction::Selected(next) => {
-                self.transition(next);
-            }
+            MenuAction::Selected(target) => match target {
+                MenuTarget::BrowseSources => {
+                    self.transition(State::BrowseSources);
+                    MenuOutcome::None
+                }
+                MenuTarget::Source(idx) => {
+                    let catalogs = &self.config.sources[idx].catalogs;
+                    if catalogs.len() == 1 {
+                        MenuOutcome::OpenGameBrowser { source_idx: idx, catalog_idx: 0 }
+                    } else {
+                        self.transition(State::SourceCatalogs(idx));
+                        MenuOutcome::None
+                    }
+                }
+                MenuTarget::Catalog(source_idx, catalog_idx) => {
+                    MenuOutcome::OpenGameBrowser { source_idx, catalog_idx }
+                }
+            },
             MenuAction::Back => {
-                if let Some(parent) = self.state.parent() {
+                if let Some(parent) = self.parent() {
                     self.transition(parent);
                 }
+                MenuOutcome::None
             }
-            MenuAction::None => {}
+            MenuAction::None => MenuOutcome::None,
         }
     }
 }
