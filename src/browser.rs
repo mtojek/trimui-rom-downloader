@@ -15,14 +15,14 @@ const LETTERS: &[char] = &[
 ];
 const ROW1_LEN: usize = 14; // # A B C D E F G H I J K L M
 
-const MAX_VISIBLE: usize = 10;
-const LETTER_BAR_FONT_SIZE: f32 = 28.0;
-const GAME_FONT_SIZE: f32 = 30.0;
-const LEGEND_FONT_SIZE: f32 = 36.0;
-const LETTER_BAR_Y: i32 = 15;
-const LETTER_ROW_SPACING: i32 = 32;
-const GAME_LIST_TOP: i32 = 90;
-const GAME_SPACING: i32 = 50;
+const MAX_VISIBLE: usize = 15;
+const LETTER_BAR_FONT_SIZE: f32 = 24.0;
+const GAME_FONT_SIZE: f32 = 22.0;
+const LEGEND_FONT_SIZE: f32 = 28.0;
+const LETTER_BAR_Y: i32 = 30;
+const LETTER_ROW_SPACING: i32 = 28;
+const GAME_LIST_GAP: i32 = 15;
+const GAME_SPACING: i32 = 36;
 const GAME_LEFT_MARGIN: i32 = 40;
 const SIZE_RIGHT_MARGIN: i32 = 40;
 const LEGEND_BOTTOM_MARGIN: i32 = 12;
@@ -139,7 +139,7 @@ impl<'a> GameBrowser<'a> {
     fn rebuild_game_list(&mut self) {
         let text = TextRenderer::new();
         let letter = self.current_letter();
-        let filtered: Vec<(String, u64)> = self.games.iter().filter(|g| {
+        let mut filtered: Vec<(String, u64)> = self.games.iter().filter(|g| {
             let name = g.key.rsplit('/').next().unwrap_or(&g.key);
             if let Some(first) = name.chars().next() {
                 if letter == '#' { !first.is_ascii_alphabetic() } else { first.to_ascii_uppercase() == letter }
@@ -147,17 +147,19 @@ impl<'a> GameBrowser<'a> {
         }).map(|g| {
             let name = g.key.rsplit('/').next().unwrap_or(&g.key).to_string();
             (name, g.file_size)
-        }).collect();
+        }).collect::<Vec<_>>();
+        filtered.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
 
         self.rendered_games.clear();
         self.rendered_selected.clear();
 
         for (name, file_size) in &filtered {
             let size_str = format_size(*file_size);
+            let display_name = truncate_name(name, 70);
 
-            let name_tex = text.render_text(self.texture_creator, &name, GAME_FONT_SIZE,
+            let name_tex = text.render_text(self.texture_creator, &display_name, GAME_FONT_SIZE,
                 NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a);
-            let name_sel = text.render_text(self.texture_creator, &name, GAME_FONT_SIZE,
+            let name_sel = text.render_text(self.texture_creator, &display_name, GAME_FONT_SIZE,
                 SELECTED_COLOR.r, SELECTED_COLOR.g, SELECTED_COLOR.b, SELECTED_COLOR.a);
             let size_tex = text.render_text(self.texture_creator, &size_str, GAME_FONT_SIZE,
                 NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a);
@@ -226,8 +228,17 @@ impl<'a> Scene for GameBrowser<'a> {
     }
 
     fn render(&mut self, canvas: &mut Canvas<Window>, _elapsed: u128) {
-        // Letter bar — row 1
+        // Letter bar background
         let row1_width: u32 = self.letter_widths[..ROW1_LEN].iter().sum();
+        let row2_width: u32 = self.letter_widths[ROW1_LEN..].iter().sum();
+        let max_row_width = row1_width.max(row2_width);
+        let letter_bar_height = LETTER_ROW_SPACING + self.letter_heights[0] as i32 + 12;
+        let letter_bg_x = (WINDOW_WIDTH as i32 - max_row_width as i32) / 2 - 8;
+        let letter_bg = Rect::new(letter_bg_x, LETTER_BAR_Y - 6, max_row_width + 16, letter_bar_height as u32);
+        canvas.set_draw_color(Color::RGBA(0, 0, 0, 200));
+        canvas.fill_rect(letter_bg).unwrap();
+
+        // Letter bar — row 1
         let mut lx = (WINDOW_WIDTH as i32 - row1_width as i32) / 2;
         for i in 0..ROW1_LEN {
             let tex = if i == self.letter_idx {
@@ -242,7 +253,6 @@ impl<'a> Scene for GameBrowser<'a> {
         }
 
         // Letter bar — row 2
-        let row2_width: u32 = self.letter_widths[ROW1_LEN..].iter().sum();
         let mut lx = (WINDOW_WIDTH as i32 - row2_width as i32) / 2;
         let row2_y = LETTER_BAR_Y + LETTER_ROW_SPACING;
         for i in ROW1_LEN..LETTERS.len() {
@@ -257,10 +267,25 @@ impl<'a> Scene for GameBrowser<'a> {
             lx += self.letter_widths[i] as i32;
         }
 
-        // Game list
+        // Game list background
+        let letter_bar_bottom = LETTER_BAR_Y - 6 + letter_bar_height;
+        let game_list_top = letter_bar_bottom + GAME_LIST_GAP;
         let end = (self.scroll_offset + MAX_VISIBLE).min(self.rendered_games.len());
+        {
+            let list_height = MAX_VISIBLE as i32 * GAME_SPACING + 12;
+            let bg_rect = Rect::new(
+                GAME_LEFT_MARGIN - 10,
+                game_list_top,
+                (WINDOW_WIDTH as i32 - 2 * (GAME_LEFT_MARGIN - 10)) as u32,
+                list_height as u32,
+            );
+            canvas.set_draw_color(Color::RGBA(0, 0, 0, 200));
+            canvas.fill_rect(bg_rect).unwrap();
+        }
+
+        // Game list
         for (vi, gi) in (self.scroll_offset..end).enumerate() {
-            let y = GAME_LIST_TOP + (vi as i32 * GAME_SPACING);
+            let y = game_list_top + 6 + (vi as i32 * GAME_SPACING);
             let game = &self.rendered_games[gi];
 
             let name_tex = if gi == self.selected {
@@ -295,6 +320,18 @@ fn has_games_for_letter(games: &[RemoteGame], letter: char) -> bool {
             false
         }
     })
+}
+
+fn truncate_name(name: &str, max_len: usize) -> String {
+    if name.len() <= max_len {
+        return name.to_string();
+    }
+    let ext = match name.rfind('.') {
+        Some(pos) => &name[pos..],
+        None => "",
+    };
+    let avail = max_len.saturating_sub(ext.len() + 3);
+    format!("{}...{}", &name[..avail], ext)
 }
 
 fn format_size(bytes: u64) -> String {

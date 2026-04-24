@@ -14,6 +14,9 @@ const SELECTED_COLOR: Color = Color::RGBA(255, 220, 80, 255);
 const LEGEND_COLOR: Color = Color::RGBA(0, 0, 0, 220);
 const ITEM_SPACING: i32 = 70;
 const LEGEND_BOTTOM_MARGIN: i32 = 12;
+const BOX_PADDING_X: i32 = 20;
+const BOX_PADDING_Y: i32 = 12;
+const BOX_COLOR: Color = Color::RGBA(0, 0, 0, 200);
 
 pub struct MenuItem<S> {
     pub label: String,
@@ -135,6 +138,15 @@ impl<'a, S: Copy> Menu<'a, S> {
         let total_menu_height =
             self.items.len() as i32 * ITEM_SPACING - (ITEM_SPACING - self.items[0].height as i32);
         let menu_top_y = (WINDOW_HEIGHT as i32 - total_menu_height) / 2;
+
+        // Background box
+        let max_width = self.items.iter().map(|i| i.width).max().unwrap_or(0) as i32;
+        let box_x = (WINDOW_WIDTH as i32 - max_width) / 2 - BOX_PADDING_X;
+        let box_y = menu_top_y - BOX_PADDING_Y;
+        let box_w = (max_width + 2 * BOX_PADDING_X) as u32;
+        let box_h = (total_menu_height + 2 * BOX_PADDING_Y) as u32;
+        canvas.set_draw_color(BOX_COLOR);
+        canvas.fill_rect(Rect::new(box_x, box_y, box_w, box_h)).unwrap();
 
         for (i, item) in self.items.iter().enumerate() {
             let y = menu_top_y + (i as i32 * ITEM_SPACING);
