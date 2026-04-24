@@ -57,11 +57,11 @@ impl Config {
             return Err(ConfigError::NotFound(path.to_string()));
         }
 
-        let contents = std::fs::read_to_string(path)
-            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        let contents =
+            std::fs::read_to_string(path).map_err(|e| ConfigError::ParseError(e.to_string()))?;
 
-        let config: Config = serde_yaml::from_str(&contents)
-            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        let config: Config =
+            serde_yaml::from_str(&contents).map_err(|e| ConfigError::ParseError(e.to_string()))?;
 
         config.validate()?;
         Ok(config)
@@ -81,35 +81,41 @@ impl Config {
                 ));
             }
             if source.endpoint.is_empty() {
-                return Err(ConfigError::ValidationError(
-                    format!("Source '{}': endpoint cannot be empty", source.name),
-                ));
+                return Err(ConfigError::ValidationError(format!(
+                    "Source '{}': endpoint cannot be empty",
+                    source.name
+                )));
             }
             if source.access_key.is_empty() {
-                return Err(ConfigError::ValidationError(
-                    format!("Source '{}': access_key cannot be empty", source.name),
-                ));
+                return Err(ConfigError::ValidationError(format!(
+                    "Source '{}': access_key cannot be empty",
+                    source.name
+                )));
             }
             if source.secret_key.is_empty() {
-                return Err(ConfigError::ValidationError(
-                    format!("Source '{}': secret_key cannot be empty", source.name),
-                ));
+                return Err(ConfigError::ValidationError(format!(
+                    "Source '{}': secret_key cannot be empty",
+                    source.name
+                )));
             }
             if source.catalogs.is_empty() {
-                return Err(ConfigError::ValidationError(
-                    format!("Source '{}': at least one catalog is required", source.name),
-                ));
+                return Err(ConfigError::ValidationError(format!(
+                    "Source '{}': at least one catalog is required",
+                    source.name
+                )));
             }
             for catalog in &source.catalogs {
                 if catalog.path.is_empty() {
-                    return Err(ConfigError::ValidationError(
-                        format!("Source '{}': catalog path cannot be empty", source.name),
-                    ));
+                    return Err(ConfigError::ValidationError(format!(
+                        "Source '{}': catalog path cannot be empty",
+                        source.name
+                    )));
                 }
                 if catalog.platform.is_empty() {
-                    return Err(ConfigError::ValidationError(
-                        format!("Source '{}': catalog platform cannot be empty", source.name),
-                    ));
+                    return Err(ConfigError::ValidationError(format!(
+                        "Source '{}': catalog platform cannot be empty",
+                        source.name
+                    )));
                 }
             }
         }
@@ -117,8 +123,4 @@ impl Config {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn rom_path(platform: &str) -> String {
-        format!("/mnt/SDCARD/Roms/{}/", platform)
-    }
 }
