@@ -36,7 +36,7 @@ fn main() {
     canvas.set_blend_mode(BlendMode::Blend);
 
     let texture_creator = canvas.texture_creator();
-    let mut bg_texture = load_texture(&texture_creator, "assets/background.png");
+    let mut bg_texture = load_texture(&texture_creator, include_bytes!("../assets/background.png"));
 
     let mut active_scene = ActiveScene::Intro(IntroScene::new(&texture_creator));
     let mut event_pump = sdl_context.event_pump().unwrap();

@@ -30,9 +30,9 @@ pub struct IntroScene<'a> {
 
 impl<'a> IntroScene<'a> {
     pub fn new(texture_creator: &'a TextureCreator<WindowContext>) -> Self {
-        let crab_front_texture = load_texture(texture_creator, "assets/sprite-crab-front.png");
-        let crab_back_texture = load_texture(texture_creator, "assets/sprite-crab-back.png");
-        let cart_texture = load_texture(texture_creator, "assets/sprite-cart.png");
+        let crab_front_texture = load_texture(texture_creator, include_bytes!("../assets/sprite-crab-front.png"));
+        let crab_back_texture = load_texture(texture_creator, include_bytes!("../assets/sprite-crab-back.png"));
+        let cart_texture = load_texture(texture_creator, include_bytes!("../assets/sprite-cart.png"));
 
         let crab_front_query = crab_front_texture.query();
         let crab_front_w = (crab_front_query.width as f32 * 0.9) as u32;
