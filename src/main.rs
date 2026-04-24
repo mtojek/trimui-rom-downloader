@@ -1,4 +1,6 @@
 mod background;
+mod config;
+mod error;
 mod input;
 mod intro;
 mod menu;
@@ -12,6 +14,8 @@ use sdl2::render::BlendMode;
 use std::time::{Duration, Instant};
 
 use crate::background::Background;
+use crate::config::Config;
+use crate::error::ErrorScene;
 use crate::input::{InputAction, InputHandler};
 use crate::intro::IntroScene;
 use crate::menu::MenuScene;
@@ -20,9 +24,22 @@ use crate::scene::{Scene, SceneResult};
 pub const WINDOW_WIDTH: u32 = 1280;
 pub const WINDOW_HEIGHT: u32 = 720;
 
+const CONFIG_PATH: &str = "sources.yaml";
+
 enum ActiveScene<'a> {
     Intro(IntroScene<'a>),
     Menu(MenuScene<'a>),
+    Error(ErrorScene<'a>),
+}
+
+impl<'a> ActiveScene<'a> {
+    fn as_scene(&mut self) -> &mut dyn Scene {
+        match self {
+            ActiveScene::Intro(s) => s,
+            ActiveScene::Menu(s) => s,
+            ActiveScene::Error(s) => s,
+        }
+    }
 }
 
 fn main() {
@@ -66,7 +83,7 @@ fn main() {
 
         let bg_alpha = match &active_scene {
             ActiveScene::Intro(scene) => scene.bg_alpha(elapsed),
-            ActiveScene::Menu(_) => 255,
+            _ => 255,
         };
         background.render(&mut canvas, bg_alpha);
 
@@ -75,10 +92,17 @@ fn main() {
                 let result = scene.update(elapsed);
                 scene.render(&mut canvas, elapsed);
                 if matches!(result, SceneResult::Next) {
-                    active_scene = ActiveScene::Menu(MenuScene::new(&texture_creator));
+                    active_scene = match Config::load(CONFIG_PATH) {
+                        Ok(_config) => ActiveScene::Menu(MenuScene::new(&texture_creator)),
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            ActiveScene::Error(ErrorScene::new(&texture_creator, &e.to_string()))
+                        }
+                    };
                 }
             }
-            ActiveScene::Menu(scene) => {
+            other => {
+                let scene = other.as_scene();
                 scene.update(elapsed);
                 scene.render(&mut canvas, elapsed);
             }

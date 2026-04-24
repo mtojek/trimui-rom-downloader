@@ -1,0 +1,13 @@
+sources:
+  - name: "Internet Archive"
+    type: s3
+    endpoint: "https://s3.us.archive.org"
+    access_key: "your-access-key"
+    secret_key: "your-secret-key"
+    catalogs:
+      - bucket: "fhw-nes-roms"
+        platform: "NES"
+        extract: true
+      - bucket: "fhw-ps1-roms"
+        platform: "PS1"
+        extract: true
