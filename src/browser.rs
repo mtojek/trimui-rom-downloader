@@ -46,6 +46,11 @@ struct RenderedGame<'a> {
     size_h: u32,
 }
 
+struct GameEntry {
+    display_name: String,
+    size_str: String,
+}
+
 pub struct GameBrowser<'a> {
     games: Vec<RemoteGame>,
     #[allow(dead_code)]
@@ -53,8 +58,10 @@ pub struct GameBrowser<'a> {
     letter_idx: usize,
     selected: usize,
     scroll_offset: usize,
+    filtered: Vec<GameEntry>,
     rendered_games: Vec<RenderedGame<'a>>,
     rendered_selected: Vec<Texture<'a>>,
+    rendered_offset: usize,
     letter_textures_normal: Vec<Texture<'a>>,
     letter_textures_active: Vec<Texture<'a>>,
     letter_textures_dim: Vec<Texture<'a>>,
@@ -115,8 +122,10 @@ impl<'a> GameBrowser<'a> {
             letter_idx: 0,
             selected: 0,
             scroll_offset: 0,
+            filtered: Vec::new(),
             rendered_games: Vec::new(),
             rendered_selected: Vec::new(),
+            rendered_offset: 0,
             letter_textures_normal,
             letter_textures_active,
             letter_textures_dim,
@@ -137,7 +146,6 @@ impl<'a> GameBrowser<'a> {
     }
 
     fn rebuild_game_list(&mut self) {
-        let text = TextRenderer::new();
         let letter = self.current_letter();
         let mut filtered: Vec<(String, u64)> = self.games.iter().filter(|g| {
             let name = g.key.rsplit('/').next().unwrap_or(&g.key);
@@ -150,18 +158,31 @@ impl<'a> GameBrowser<'a> {
         }).collect::<Vec<_>>();
         filtered.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
 
+        self.filtered = filtered.into_iter().map(|(name, size)| {
+            GameEntry {
+                display_name: truncate_name(&name, 70),
+                size_str: format_size(size),
+            }
+        }).collect();
+
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.render_visible();
+    }
+
+    fn render_visible(&mut self) {
+        let end = (self.scroll_offset + MAX_VISIBLE).min(self.filtered.len());
+        let text = TextRenderer::new();
         self.rendered_games.clear();
         self.rendered_selected.clear();
+        self.rendered_offset = self.scroll_offset;
 
-        for (name, file_size) in &filtered {
-            let size_str = format_size(*file_size);
-            let display_name = truncate_name(name, 70);
-
-            let name_tex = text.render_text(self.texture_creator, &display_name, GAME_FONT_SIZE,
+        for entry in &self.filtered[self.scroll_offset..end] {
+            let name_tex = text.render_text(self.texture_creator, &entry.display_name, GAME_FONT_SIZE,
                 NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a);
-            let name_sel = text.render_text(self.texture_creator, &display_name, GAME_FONT_SIZE,
+            let name_sel = text.render_text(self.texture_creator, &entry.display_name, GAME_FONT_SIZE,
                 SELECTED_COLOR.r, SELECTED_COLOR.g, SELECTED_COLOR.b, SELECTED_COLOR.a);
-            let size_tex = text.render_text(self.texture_creator, &size_str, GAME_FONT_SIZE,
+            let size_tex = text.render_text(self.texture_creator, &entry.size_str, GAME_FONT_SIZE,
                 NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a);
 
             let nq = name_tex.query();
@@ -177,9 +198,6 @@ impl<'a> GameBrowser<'a> {
             });
             self.rendered_selected.push(name_sel);
         }
-
-        self.selected = 0;
-        self.scroll_offset = 0;
     }
 
     pub fn handle_input(&mut self, action: InputAction) -> BrowserOutcome {
@@ -203,15 +221,17 @@ impl<'a> GameBrowser<'a> {
                     self.selected -= 1;
                     if self.selected < self.scroll_offset {
                         self.scroll_offset = self.selected;
+                        self.render_visible();
                     }
                 }
                 BrowserOutcome::None
             }
             InputAction::Down => {
-                if self.selected + 1 < self.rendered_games.len() {
+                if self.selected + 1 < self.filtered.len() {
                     self.selected += 1;
                     if self.selected >= self.scroll_offset + MAX_VISIBLE {
                         self.scroll_offset = self.selected - MAX_VISIBLE + 1;
+                        self.render_visible();
                     }
                 }
                 BrowserOutcome::None
@@ -270,7 +290,6 @@ impl<'a> Scene for GameBrowser<'a> {
         // Game list background
         let letter_bar_bottom = LETTER_BAR_Y - 6 + letter_bar_height;
         let game_list_top = letter_bar_bottom + GAME_LIST_GAP;
-        let end = (self.scroll_offset + MAX_VISIBLE).min(self.rendered_games.len());
         {
             let list_height = MAX_VISIBLE as i32 * GAME_SPACING + 12;
             let bg_rect = Rect::new(
@@ -284,12 +303,12 @@ impl<'a> Scene for GameBrowser<'a> {
         }
 
         // Game list
-        for (vi, gi) in (self.scroll_offset..end).enumerate() {
+        for (vi, game) in self.rendered_games.iter().enumerate() {
+            let gi = self.rendered_offset + vi;
             let y = game_list_top + 6 + (vi as i32 * GAME_SPACING);
-            let game = &self.rendered_games[gi];
 
             let name_tex = if gi == self.selected {
-                &self.rendered_selected[gi]
+                &self.rendered_selected[vi]
             } else {
                 &game.name_texture
             };
