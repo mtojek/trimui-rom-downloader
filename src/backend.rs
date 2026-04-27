@@ -15,15 +15,12 @@ pub struct RemoteGame {
 #[derive(Debug)]
 pub enum BackendError {
     ListFailed(String),
-    #[allow(dead_code)]
-    DownloadFailed(String),
 }
 
 impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BackendError::ListFailed(msg) => write!(f, "List failed: {}", msg),
-            BackendError::DownloadFailed(msg) => write!(f, "Download failed: {}", msg),
         }
     }
 }
@@ -35,10 +32,6 @@ pub trait SourceBackend: Send + Sync {
         log: &Sender<String>,
         cancel: &Arc<AtomicBool>,
     ) -> Result<Vec<RemoteGame>, BackendError>;
-
-    #[allow(dead_code)]
-    fn download_object(&self, catalog: &Catalog, key: &str, dest: &str)
-    -> Result<(), BackendError>;
 }
 
 fn send_log(log: &Sender<String>, msg: String) {
@@ -204,32 +197,4 @@ impl SourceBackend for S3Backend {
         Ok(games)
     }
 
-    fn download_object(
-        &self,
-        catalog: &Catalog,
-        key: &str,
-        dest: &str,
-    ) -> Result<(), BackendError> {
-        let bucket = self
-            .bucket()
-            .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
-
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
-
-        let full_key = format!("{}/{}", catalog.path, key);
-        let response = rt.block_on(async {
-            bucket
-                .get_object(&full_key)
-                .await
-                .map_err(|e| BackendError::DownloadFailed(e.to_string()))
-        })?;
-
-        std::fs::write(dest, response.bytes())
-            .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
-
-        Ok(())
-    }
 }

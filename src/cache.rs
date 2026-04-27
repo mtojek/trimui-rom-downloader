@@ -77,7 +77,12 @@ impl CatalogCache {
         fs::write(&path, yaml).map_err(|e| CacheError::IoError(e.to_string()))
     }
 
-    #[allow(dead_code)]
+    pub fn age(&self, source_name: &str, catalog: &Catalog) -> Option<Duration> {
+        let path = self.cache_path(source_name, catalog);
+        let modified = fs::metadata(&path).ok()?.modified().ok()?;
+        SystemTime::now().duration_since(modified).ok()
+    }
+
     pub fn invalidate(&self, source_name: &str, catalog: &Catalog) -> Result<(), CacheError> {
         let path = self.cache_path(source_name, catalog);
         if path.exists() {

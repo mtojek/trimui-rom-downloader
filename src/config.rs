@@ -2,13 +2,11 @@ use serde::Deserialize;
 use std::fmt;
 use std::path::Path;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub sources: Vec<Source>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct Source {
     pub name: String,
@@ -22,7 +20,6 @@ pub struct Source {
     pub options: SourceOptions,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SourceOptions {
     #[serde(default)]
@@ -35,12 +32,10 @@ pub enum SourceType {
     S3,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct Catalog {
     pub path: String,
     pub platform: String,
-    pub extract: bool,
 }
 
 #[derive(Debug)]

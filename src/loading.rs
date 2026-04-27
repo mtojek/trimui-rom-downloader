@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 
 use crate::backend::{self, RemoteGame};
 use crate::cache::CatalogCache;
-use crate::config::{Catalog, Source};
+use crate::config::{Catalog, Config, Source};
 use crate::input::InputAction;
 use crate::scene::{Scene, SceneResult};
 use crate::text::TextRenderer;
@@ -30,21 +30,24 @@ pub enum LoadingOutcome {
     None,
     Done {
         games: Vec<RemoteGame>,
-        platform: String,
         source_idx: usize,
-        catalog_idx: usize,
     },
+    RefreshDone,
     Cancelled,
+}
+
+enum LoadingResult {
+    Single(Option<Vec<RemoteGame>>),
+    RefreshAll(bool),
 }
 
 pub struct LoadingScene<'a> {
     log_lines: Vec<String>,
     log_rx: Receiver<String>,
     cancel: Arc<AtomicBool>,
-    handle: Option<JoinHandle<Option<Vec<RemoteGame>>>>,
-    platform: String,
+    handle: Option<JoinHandle<LoadingResult>>,
     pub source_idx: usize,
-    pub catalog_idx: usize,
+    pub refresh_all: bool,
     rendered_lines: Vec<(Texture<'a>, u32, u32)>,
     legend_texture: Texture<'a>,
     legend_w: u32,
@@ -60,15 +63,13 @@ impl<'a> LoadingScene<'a> {
         catalog: Catalog,
         cache: CatalogCache,
         source_idx: usize,
-        catalog_idx: usize,
     ) -> Self {
         let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_clone = cancel.clone();
-        let platform = catalog.platform.clone();
 
         let handle = std::thread::spawn(move || {
-            Self::fetch_games(source, catalog, cache, log_tx, cancel_clone)
+            LoadingResult::Single(Self::fetch_games(source, catalog, cache, log_tx, cancel_clone))
         });
 
         let text = TextRenderer::new();
@@ -85,9 +86,8 @@ impl<'a> LoadingScene<'a> {
             log_rx,
             cancel,
             handle: Some(handle),
-            platform,
             source_idx,
-            catalog_idx,
+            refresh_all: false,
             rendered_lines: Vec::new(),
             legend_texture: legend,
             legend_w: lq.width,
@@ -95,6 +95,86 @@ impl<'a> LoadingScene<'a> {
             texture_creator,
             dirty: false,
         }
+    }
+
+    pub fn new_refresh_all(
+        texture_creator: &'a TextureCreator<WindowContext>,
+        config: Config,
+    ) -> Self {
+        let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_clone = cancel.clone();
+
+        let handle = std::thread::spawn(move || {
+            LoadingResult::RefreshAll(Self::refresh_all_sources(config, log_tx, cancel_clone))
+        });
+
+        let text = TextRenderer::new();
+        let legend = text.render_text(
+            texture_creator,
+            "B: Cancel",
+            LEGEND_FONT_SIZE,
+            LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a,
+        );
+        let lq = legend.query();
+
+        LoadingScene {
+            log_lines: Vec::new(),
+            log_rx,
+            cancel,
+            handle: Some(handle),
+            source_idx: 0,
+            refresh_all: true,
+            rendered_lines: Vec::new(),
+            legend_texture: legend,
+            legend_w: lq.width,
+            legend_h: lq.height,
+            texture_creator,
+            dirty: false,
+        }
+    }
+
+    fn refresh_all_sources(
+        config: Config,
+        log: Sender<String>,
+        cancel: Arc<AtomicBool>,
+    ) -> bool {
+        let cache = CatalogCache::new();
+        for source in &config.sources {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = log.send("Cancelled".to_string());
+                return false;
+            }
+            let _ = log.send(format!("--- {} ---", source.name));
+            for catalog in &source.catalogs {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = log.send("Cancelled".to_string());
+                    return false;
+                }
+                let _ = log.send(format!("Refreshing: {}", catalog.path));
+                let _ = cache.invalidate(&source.name, catalog);
+                let be = match backend::create_backend(source) {
+                    Ok(be) => be,
+                    Err(e) => {
+                        let _ = log.send(format!("ERROR: {}", e));
+                        continue;
+                    }
+                };
+                match be.list_all_objects(catalog, &log, &cancel) {
+                    Ok(games) => {
+                        let _ = log.send(format!("Fetched {} games", games.len()));
+                        if let Err(e) = cache.save(&source.name, catalog, &games) {
+                            let _ = log.send(format!("Cache save error: {}", e));
+                        }
+                    }
+                    Err(e) => {
+                        let _ = log.send(format!("ERROR: {}", e));
+                    }
+                }
+            }
+        }
+        let _ = log.send("All sources refreshed!".to_string());
+        true
     }
 
     fn fetch_games(
@@ -181,14 +261,18 @@ impl<'a> LoadingScene<'a> {
         let finished = self.handle.as_ref().is_some_and(|h| h.is_finished());
         if finished {
             if let Some(handle) = self.handle.take() {
+                if self.cancel.load(Ordering::Relaxed) {
+                    return LoadingOutcome::Cancelled;
+                }
                 match handle.join() {
-                    Ok(Some(games)) if !self.cancel.load(Ordering::Relaxed) => {
+                    Ok(LoadingResult::Single(Some(games))) => {
                         return LoadingOutcome::Done {
                             games,
-                            platform: self.platform.clone(),
                             source_idx: self.source_idx,
-                            catalog_idx: self.catalog_idx,
                         };
+                    }
+                    Ok(LoadingResult::RefreshAll(true)) => {
+                        return LoadingOutcome::RefreshDone;
                     }
                     _ => return LoadingOutcome::Cancelled,
                 }

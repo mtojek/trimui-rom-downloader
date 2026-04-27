@@ -62,7 +62,14 @@ pub fn run(
                                     let source = cfg.sources[source_idx].clone();
                                     let catalog = source.catalogs[catalog_idx].clone();
                                     active_scene = ActiveScene::Loading(
-                                        LoadingScene::new(texture_creator, source, catalog, CatalogCache::new(), source_idx, catalog_idx),
+                                        LoadingScene::new(texture_creator, source, catalog, CatalogCache::new(), source_idx),
+                                    );
+                                }
+                            }
+                            MenuOutcome::RefreshAll => {
+                                if let Some(cfg) = &config {
+                                    active_scene = ActiveScene::Loading(
+                                        LoadingScene::new_refresh_all(texture_creator, cfg.clone()),
                                     );
                                 }
                             }
@@ -70,12 +77,20 @@ pub fn run(
                         }
                     }
                     ActiveScene::Loading(scene) => {
+                        let is_refresh_all = scene.refresh_all;
+                        let si = scene.source_idx;
                         match scene.handle_input(action) {
                             LoadingOutcome::Cancelled => {
                                 if let Some(cfg) = &config {
-                                    active_scene = ActiveScene::Menu(
-                                        MenuScene::new_at_source(texture_creator, cfg.clone(), scene.source_idx),
-                                    );
+                                    if is_refresh_all {
+                                        let mut menu = MenuScene::new(texture_creator, cfg.clone());
+                                        menu.go_to_browse_sources();
+                                        active_scene = ActiveScene::Menu(menu);
+                                    } else {
+                                        active_scene = ActiveScene::Menu(
+                                            MenuScene::new_at_source(texture_creator, cfg.clone(), si),
+                                        );
+                                    }
                                 }
                             }
                             _ => {}
@@ -87,19 +102,6 @@ pub fn run(
                                 if let Some(cfg) = &config {
                                     active_scene = ActiveScene::Menu(
                                         MenuScene::new_at_source(texture_creator, cfg.clone(), scene.source_idx),
-                                    );
-                                }
-                            }
-                            BrowserOutcome::Refresh => {
-                                if let Some(cfg) = &config {
-                                    let si = scene.source_idx;
-                                    let ci = scene.catalog_idx;
-                                    let source = cfg.sources[si].clone();
-                                    let catalog = source.catalogs[ci].clone();
-                                    let cache = CatalogCache::new();
-                                    let _ = cache.invalidate(&source.name, &catalog);
-                                    active_scene = ActiveScene::Loading(
-                                        LoadingScene::new(texture_creator, source, catalog, cache, si, ci),
                                     );
                                 }
                             }
@@ -145,16 +147,29 @@ pub fn run(
                 scene.update(elapsed);
                 scene.render(canvas, elapsed);
                 match scene.check_result() {
-                    LoadingOutcome::Done { games, platform, source_idx, catalog_idx } => {
+                    LoadingOutcome::Done { games, source_idx, .. } => {
                         active_scene = ActiveScene::Browser(
-                            GameBrowser::new(texture_creator, games, platform, source_idx, catalog_idx),
+                            GameBrowser::new(texture_creator, games, source_idx),
                         );
+                    }
+                    LoadingOutcome::RefreshDone => {
+                        if let Some(cfg) = &config {
+                            let mut menu = MenuScene::new(texture_creator, cfg.clone());
+                            menu.go_to_browse_sources();
+                            active_scene = ActiveScene::Menu(menu);
+                        }
                     }
                     LoadingOutcome::Cancelled => {
                         if let Some(cfg) = &config {
-                            active_scene = ActiveScene::Menu(
-                                MenuScene::new_at_source(texture_creator, cfg.clone(), si),
-                            );
+                            if scene.refresh_all {
+                                let mut menu = MenuScene::new(texture_creator, cfg.clone());
+                                menu.go_to_browse_sources();
+                                active_scene = ActiveScene::Menu(menu);
+                            } else {
+                                active_scene = ActiveScene::Menu(
+                                    MenuScene::new_at_source(texture_creator, cfg.clone(), si),
+                                );
+                            }
                         }
                     }
                     LoadingOutcome::None => {}
