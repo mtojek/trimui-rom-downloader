@@ -8,6 +8,6 @@ sources:
       resolve_redirect: true
     catalogs:
       - path: "fhw-nes-roms"
-        platform: "NES"
+        platform: "FC"
       - path: "fhw-ps1-roms"
-        platform: "PS1"
+        platform: "PS"

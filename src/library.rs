@@ -13,7 +13,6 @@ pub struct GameEntry {
     pub platform: String,
     pub key: String,
     pub install_path: String,
-    pub file_size: u64,
 }
 
 #[derive(Debug)]
@@ -47,8 +46,10 @@ impl MyGames {
             .ok()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
-        let path = exe_dir.join(DATA_DIR_NAME).join(LIBRARY_FILE);
+        Self::from_path(exe_dir.join(DATA_DIR_NAME).join(LIBRARY_FILE))
+    }
 
+    fn from_path(path: PathBuf) -> Self {
         let mut lib = MyGames {
             path,
             entries: Vec::new(),
@@ -125,5 +126,113 @@ impl MyGames {
         }
 
         self.save()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_library(name: &str) -> (MyGames, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("mygames_test_{}", name));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mygames.yaml");
+        (MyGames::from_path(path), dir)
+    }
+
+    fn sample_entry(key: &str) -> GameEntry {
+        GameEntry {
+            source: "Internet Archive".to_string(),
+            platform: PS.to_string(),
+            key: key.to_string(),
+            install_path: format!("/mnt/SDCARD/Roms/Sony PlayStation (PS)/{}", key),
+        }
+    }
+
+    const PS: &str = "PS";
+
+    #[test]
+    fn add_and_is_installed() {
+        let (mut lib, dir) = temp_library("add");
+        assert!(!lib.is_installed("Internet Archive", PS, "Crash Bandicoot"));
+
+        lib.add(sample_entry("Crash Bandicoot")).unwrap();
+        assert!(lib.is_installed("Internet Archive", PS, "Crash Bandicoot"));
+        assert_eq!(lib.list().len(), 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_is_idempotent() {
+        let (mut lib, dir) = temp_library("idempotent");
+        lib.add(sample_entry("Spyro the Dragon")).unwrap();
+        lib.add(sample_entry("Spyro the Dragon")).unwrap();
+        assert_eq!(lib.list().len(), 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_entry() {
+        let (mut lib, dir) = temp_library("remove");
+        lib.add(sample_entry("Crash Bandicoot")).unwrap();
+        lib.add(sample_entry("Spyro the Dragon")).unwrap();
+        assert_eq!(lib.list().len(), 2);
+
+        lib.remove("Internet Archive", PS, "Crash Bandicoot").unwrap();
+        assert!(!lib.is_installed("Internet Archive", PS, "Crash Bandicoot"));
+        assert!(lib.is_installed("Internet Archive", PS, "Spyro the Dragon"));
+        assert_eq!(lib.list().len(), 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_nonexistent_is_ok() {
+        let (mut lib, dir) = temp_library("remove_none");
+        lib.remove("Internet Archive", PS, "nope").unwrap();
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persists_to_disk_and_reloads() {
+        let (mut lib, dir) = temp_library("persist");
+        lib.add(sample_entry("Crash Bandicoot")).unwrap();
+        lib.add(sample_entry("Spyro the Dragon")).unwrap();
+
+        // Reload from disk
+        let lib2 = MyGames::from_path(dir.join("mygames.yaml"));
+        assert_eq!(lib2.list().len(), 2);
+        assert!(lib2.is_installed("Internet Archive", PS, "Crash Bandicoot"));
+        assert!(lib2.is_installed("Internet Archive", PS, "Spyro the Dragon"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn yaml_matches_golden_file() {
+        let (mut lib, dir) = temp_library("golden");
+        lib.add(GameEntry {
+            source: "Internet Archive".to_string(),
+            platform: PS.to_string(),
+            key: "Crash Bandicoot".to_string(),
+            install_path: "/mnt/SDCARD/Roms/Sony PlayStation (PS)/Crash Bandicoot".to_string(),
+        }).unwrap();
+        lib.add(GameEntry {
+            source: "Internet Archive".to_string(),
+            platform: PS.to_string(),
+            key: "Spyro the Dragon".to_string(),
+            install_path: "/mnt/SDCARD/Roms/Sony PlayStation (PS)/Spyro the Dragon".to_string(),
+        }).unwrap();
+
+        let actual = fs::read_to_string(dir.join("mygames.yaml")).unwrap();
+        let golden = include_str!("../testdata/mygames_example.yaml");
+        assert_eq!(actual, golden, "YAML output does not match golden file testdata/mygames_example.yaml");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
