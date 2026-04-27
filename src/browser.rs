@@ -118,7 +118,7 @@ impl<'a> GameBrowser<'a> {
         let mut browser = GameBrowser {
             games: all_games,
             source_idx,
-            letter_idx: 0,
+            letter_idx: letter_has_games.iter().position(|&h| h).unwrap_or(0),
             selected: 0,
             scroll_offset: 0,
             filtered: Vec::new(),
@@ -202,15 +202,15 @@ impl<'a> GameBrowser<'a> {
     pub fn handle_input(&mut self, action: InputAction) -> BrowserOutcome {
         match action {
             InputAction::Left => {
-                if self.letter_idx > 0 {
-                    self.letter_idx -= 1;
+                if let Some(idx) = (0..self.letter_idx).rev().find(|&i| self.letter_has_games[i]) {
+                    self.letter_idx = idx;
                     self.rebuild_game_list();
                 }
                 BrowserOutcome::None
             }
             InputAction::Right => {
-                if self.letter_idx < LETTERS.len() - 1 {
-                    self.letter_idx += 1;
+                if let Some(idx) = (self.letter_idx + 1..LETTERS.len()).find(|&i| self.letter_has_games[i]) {
+                    self.letter_idx = idx;
                     self.rebuild_game_list();
                 }
                 BrowserOutcome::None
