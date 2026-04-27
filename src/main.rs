@@ -7,6 +7,7 @@ mod config;
 mod error;
 mod input;
 mod intro;
+mod library;
 mod loading;
 mod menu;
 mod scene;
