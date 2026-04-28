@@ -55,6 +55,7 @@ struct RenderedGame<'a> {
 
 struct GameEntry {
     full_key: String,
+    bucket_name: String,
     file_name: String,
     game_key: String,
     display_name: String,
@@ -180,6 +181,7 @@ impl<'a> GameBrowser<'a> {
             let display = truncate_name(&file_name, 68);
             GameEntry {
                 full_key: g.key.clone(),
+                bucket_name: g.bucket_name.clone(),
                 file_name,
                 game_key,
                 display_name: display,
@@ -314,6 +316,7 @@ impl<'a> GameBrowser<'a> {
                             source: self.source.clone(),
                             platform: self.platform.clone(),
                             key: entry.full_key.clone(),
+                            bucket_name: entry.bucket_name.clone(),
                             file_name: entry.file_name.clone(),
                             game_key: entry.game_key.clone(),
                             dest_path: dest,

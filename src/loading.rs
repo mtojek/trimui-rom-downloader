@@ -137,6 +137,7 @@ impl<'a> LoadingScene<'a> {
                 credentials: String::new(),
                 platform: String::new(),
                 buckets: Vec::new(),
+                extract: false,
             },
             platform: String::new(),
             source_idx: 0,

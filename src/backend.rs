@@ -10,6 +10,8 @@ use crate::config::{Bucket, Config, Source, SourceType};
 pub struct RemoteGame {
     pub key: String,
     pub file_size: u64,
+    #[serde(default)]
+    pub bucket_name: String,
 }
 
 #[derive(Debug)]
@@ -193,6 +195,7 @@ impl SourceBackend for IABackend {
                 .map_err(|e| BackendError::ListFailed(e.to_string()))
         })?;
 
+        let bucket_name = bucket.name.clone();
         let games: Vec<RemoteGame> = metadata.result.iter()
             .filter(|f| prefix.is_empty() || f.name.starts_with(&prefix))
             .filter_map(|f| {
@@ -200,6 +203,7 @@ impl SourceBackend for IABackend {
                 Some(RemoteGame {
                     key: f.name.clone(),
                     file_size: size,
+                    bucket_name: bucket_name.clone(),
                 })
             })
             .collect();

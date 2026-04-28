@@ -44,6 +44,7 @@ pub struct DownloadEntry {
     pub source_name: String,
     pub platform: String,
     pub key: String,
+    pub bucket_name: String,
     pub file_name: String,
     pub game_key: String,
     pub dest_path: PathBuf,
@@ -64,6 +65,7 @@ pub enum DownloadCommand {
         source: Source,
         platform: String,
         key: String,
+        bucket_name: String,
         file_name: String,
         game_key: String,
         dest_path: PathBuf,
@@ -146,6 +148,8 @@ struct PersistedEntry {
     source_name: String,
     platform: String,
     key: String,
+    #[serde(default)]
+    bucket_name: String,
     state: PersistedState,
 }
 
@@ -229,6 +233,7 @@ impl DownloadManager {
                             source_name: pe.source_name,
                             platform: pe.platform,
                             key: pe.key,
+                            bucket_name: pe.bucket_name,
                             file_name,
                             game_key,
                             dest_path,
@@ -313,19 +318,23 @@ fn worker_loop(
 
     // Resolve total_bytes via HEAD for loaded entries
     {
-        let entries_to_resolve: Vec<(DownloadId, String, String)> = {
+        let entries_to_resolve: Vec<(DownloadId, String, String, String)> = {
             let q = queue.lock().unwrap();
             q.entries.iter()
                 .filter(|e| e.total_bytes == 0 && e.state != DownloadState::Completed)
-                .map(|e| (e.id, e.source_name.clone(), e.key.clone()))
+                .map(|e| (e.id, e.source_name.clone(), e.key.clone(), e.bucket_name.clone()))
                 .collect()
         };
-        for (id, source_name, key) in entries_to_resolve {
+        for (id, source_name, key, bucket_name) in entries_to_resolve {
             let source = config.sources.iter().find(|s| s.name == source_name);
             if let Some(source) = source {
                 match backend::create_backend(source, &config) {
                     Ok(be) => {
-                        let bucket_name = find_bucket_name(source, &key);
+                        let bucket_name = if bucket_name.is_empty() {
+                            find_bucket_name(source, &key)
+                        } else {
+                            bucket_name.clone()
+                        };
                         match be.head_object(&bucket_name, &key) {
                             Ok(size) => {
                                 let mut q = queue.lock().unwrap();
@@ -353,6 +362,7 @@ fn worker_loop(
                     source,
                     platform,
                     key,
+                    bucket_name,
                     file_name,
                     game_key,
                     dest_path,
@@ -377,8 +387,8 @@ fn worker_loop(
                     let id = q.next_id;
                     q.next_id += 1;
                     eprintln!(
-                        "[DL] #{} Enqueued: '{}' ({}) source='{}' platform='{}' dest='{}'",
-                        id, file_name, format_bytes(total_bytes), source.name, platform, dest_path.display()
+                        "[DL] #{} Enqueued: '{}' ({}) source='{}' bucket='{}' platform='{}' dest='{}'",
+                        id, file_name, format_bytes(total_bytes), source.name, bucket_name, platform, dest_path.display()
                     );
                     q.entries.push_back(DownloadEntry {
                         id,
@@ -386,6 +396,7 @@ fn worker_loop(
                         source_name: source.name.clone(),
                         platform,
                         key,
+                        bucket_name,
                         file_name,
                         game_key,
                         dest_path,
@@ -524,6 +535,7 @@ fn worker_loop(
 
                 let source_name = entry.source_name.clone();
                 let key = entry.key.clone();
+                let bucket_name = entry.bucket_name.clone();
                 let file_name = entry.file_name.clone();
                 let dest = entry.dest_path.clone();
                 let total_bytes = entry.total_bytes;
@@ -572,6 +584,7 @@ fn worker_loop(
                         id,
                         source,
                         config_clone,
+                        &bucket_name,
                         &key,
                         &file_name,
                         &dest,
@@ -598,6 +611,7 @@ fn download_worker(
     id: DownloadId,
     source: Option<Source>,
     config: Config,
+    bucket_name: &str,
     key: &str,
     file_name: &str,
     dest: &std::path::Path,
@@ -610,7 +624,6 @@ fn download_worker(
         BackendError::DownloadFailed("Source not found in config".to_string())
     })?;
 
-    let bucket_name = find_bucket_name(&source, key);
     eprintln!("[DL] #{} '{}': Creating backend for source '{}', bucket '{}'", id, file_name, source.name, bucket_name);
     let be = backend::create_backend(&source, &config)?;
 
@@ -665,11 +678,52 @@ fn download_worker(
     let _ = progress_thread.join();
 
     match &result {
-        Ok(()) => eprintln!("[DL] #{} '{}': download_object completed successfully", id, file_name),
+        Ok(()) => {
+            eprintln!("[DL] #{} '{}': download_object completed successfully", id, file_name);
+            if source.extract && file_name.to_lowercase().ends_with(".zip") {
+                eprintln!("[DL] #{} '{}': Extracting zip archive...", id, file_name);
+                if let Err(e) = extract_zip(dest) {
+                    eprintln!("[DL] #{} '{}': Extraction failed: {}", id, file_name, e);
+                    return Err(BackendError::DownloadFailed(format!("Extraction failed: {}", e)));
+                }
+                eprintln!("[DL] #{} '{}': Extraction complete, deleting archive", id, file_name);
+                let _ = std::fs::remove_file(dest);
+            }
+        }
         Err(e) => eprintln!("[DL] #{} '{}': download_object error: {}", id, file_name, e),
     }
 
     result
+}
+
+fn extract_zip(archive_path: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::open(archive_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+
+    let dest_dir = archive_path.parent().ok_or("No parent directory")?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let name = entry.name().to_string();
+
+        if entry.is_dir() {
+            continue;
+        }
+
+        // Flatten: extract only the file name, ignore any directory structure inside the zip
+        let file_name = name.rsplit('/').next().unwrap_or(&name);
+        if file_name.is_empty() {
+            continue;
+        }
+
+        let out_path = dest_dir.join(file_name);
+        eprintln!("[DL] Extracting: {} -> {}", name, out_path.display());
+
+        let mut outfile = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 fn queue_path() -> PathBuf {
@@ -696,6 +750,7 @@ fn save_queue_locked(q: &DownloadQueue) {
                 source_name: e.source_name.clone(),
                 platform: e.platform.clone(),
                 key: e.key.clone(),
+                bucket_name: e.bucket_name.clone(),
                 state,
             })
         })

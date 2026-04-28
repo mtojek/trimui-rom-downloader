@@ -24,6 +24,8 @@ pub struct Source {
     pub credentials: String,
     pub platform: String,
     pub buckets: Vec<Bucket>,
+    #[serde(default)]
+    pub extract: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
