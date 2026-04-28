@@ -16,20 +16,12 @@ pub struct Source {
     pub access_key: String,
     pub secret_key: String,
     pub catalogs: Vec<Catalog>,
-    #[serde(default)]
-    pub options: SourceOptions,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct SourceOptions {
-    #[serde(default)]
-    pub resolve_redirect: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum SourceType {
-    S3,
+    S3Archive,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,5 +118,4 @@ impl Config {
 
         Ok(())
     }
-
 }

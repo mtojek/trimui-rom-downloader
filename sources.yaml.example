@@ -1,11 +1,9 @@
 sources:
   - name: "Internet Archive"
-    type: s3
-    endpoint: "https://s3.us.archive.org/your-bucket"
+    type: s3_archive
+    endpoint: "your-ia-item-identifier"
     access_key: "your-access-key"
     secret_key: "your-secret-key"
-    options:
-      resolve_redirect: true
     catalogs:
       - path: "fhw-nes-roms"
         platform: "FC"

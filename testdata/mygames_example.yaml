@@ -1,8 +1,6 @@
-- source: Internet Archive
+- key: Crash Bandicoot
+  source: Internet Archive
   platform: PS
-  key: Crash Bandicoot
-  install_path: /mnt/SDCARD/Roms/Sony PlayStation (PS)/Crash Bandicoot
-- source: Internet Archive
+- key: Spyro the Dragon
+  source: Internet Archive
   platform: PS
-  key: Spyro the Dragon
-  install_path: /mnt/SDCARD/Roms/Sony PlayStation (PS)/Spyro the Dragon

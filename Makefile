@@ -1,11 +1,26 @@
-.PHONY: dev build build-tsp clean docker-build docker-shell tsp
+.PHONY: dev dev-dirs build build-tsp clean docker-build docker-shell tsp
 
 IMAGE_NAME := trimui-rom-downloader-toolchain
 WORKSPACE_DIR := $(shell pwd)
 
-dev:
+DEV_ROM_DIR := /tmp/trimui-rom-downloader/mnt/SDCARD/Roms
+
+dev: dev-dirs
+	RUST_BACKTRACE=1 \
 	LIBRARY_PATH=/opt/homebrew/opt/sdl2/lib \
+	TRD_ROM_BASE_DIR=$(DEV_ROM_DIR) \
 	cargo run
+
+dev-dirs:
+	@mkdir -p "$(DEV_ROM_DIR)/Sony PlayStation (PS)"
+	@mkdir -p "$(DEV_ROM_DIR)/Nintendo Entertainment System (FC)"
+	@mkdir -p "$(DEV_ROM_DIR)/Game Boy Advance (GBA)"
+	@mkdir -p "$(DEV_ROM_DIR)/Game Boy Color (GBC)"
+	@mkdir -p "$(DEV_ROM_DIR)/Game Boy (GB)"
+	@mkdir -p "$(DEV_ROM_DIR)/Super Nintendo Entertainment System (SFC)"
+	@mkdir -p "$(DEV_ROM_DIR)/Sega Genesis (MD)"
+	@mkdir -p "$(DEV_ROM_DIR)/Sega CD (SEGACD)"
+	@mkdir -p "$(DEV_ROM_DIR)/Arcade (FBN)"
 
 build:
 	LIBRARY_PATH=/opt/homebrew/opt/sdl2/lib \
@@ -33,3 +48,4 @@ docker-shell: docker-build
 clean:
 	cargo clean
 	rm -f "ROM Downloader.pak/trimui-rom-downloader"
+	rm -rf /tmp/trimui-rom-downloader

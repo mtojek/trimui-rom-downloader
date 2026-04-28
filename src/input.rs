@@ -13,6 +13,7 @@ pub enum InputAction {
     Right,
     Confirm,
     Back,
+    Action,
     Refresh,
     Quit,
 }
@@ -81,6 +82,7 @@ impl InputHandler {
                 Keycode::P => InputAction::Right,
                 Keycode::Return => InputAction::Confirm,
                 Keycode::Backspace => InputAction::Back,
+                Keycode::X => InputAction::Action,
                 Keycode::Y => InputAction::Refresh,
                 _ => InputAction::None,
             },
@@ -99,6 +101,7 @@ impl InputHandler {
                     Button::RightShoulder => InputAction::Right,
                     Button::A => InputAction::Back,
                     Button::B => InputAction::Confirm,
+                    Button::X => InputAction::Action,
                     Button::Y => InputAction::Refresh,
                     _ => InputAction::None,
                 }

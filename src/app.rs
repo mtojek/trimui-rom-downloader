@@ -7,9 +7,12 @@ use crate::background::Background;
 use crate::browser::{BrowserOutcome, GameBrowser};
 use crate::cache::CatalogCache;
 use crate::config::Config;
+use crate::download::DownloadManager;
 use crate::error::ErrorScene;
 use crate::input::{InputAction, InputHandler};
+use crate::install_dir::InstallDirResolver;
 use crate::intro::IntroScene;
+use crate::library::MyGames;
 use crate::loading::{LoadingOutcome, LoadingScene};
 use crate::menu::{MenuOutcome, MenuScene};
 use crate::scene::{Scene, SceneResult};
@@ -45,6 +48,9 @@ pub fn run(
     let mut background = Background::new(texture_creator);
     let mut active_scene = ActiveScene::Intro(IntroScene::new(texture_creator));
     let mut config: Option<Config> = None;
+    let mut download_mgr: Option<DownloadManager> = None;
+    let mut my_games = MyGames::new();
+    let install_resolver = InstallDirResolver::new();
     let start = Instant::now();
 
     'running: loop {
@@ -97,15 +103,17 @@ pub fn run(
                         }
                     }
                     ActiveScene::Browser(scene) => {
-                        match scene.handle_input(action) {
-                            BrowserOutcome::Back => {
-                                if let Some(cfg) = &config {
-                                    active_scene = ActiveScene::Menu(
-                                        MenuScene::new_at_source(texture_creator, cfg.clone(), scene.source_idx),
-                                    );
+                        if let Some(dm) = &download_mgr {
+                            match scene.handle_input(action, &mut my_games, dm, &install_resolver) {
+                                BrowserOutcome::Back => {
+                                    if let Some(cfg) = &config {
+                                        active_scene = ActiveScene::Menu(
+                                            MenuScene::new_at_source(texture_creator, cfg.clone(), scene.source_idx),
+                                        );
+                                    }
                                 }
+                                BrowserOutcome::None => {}
                             }
-                            BrowserOutcome::None => {}
                         }
                     }
                     _ => {}
@@ -131,6 +139,7 @@ pub fn run(
                 if matches!(result, SceneResult::Next) {
                     active_scene = match Config::load(CONFIG_PATH) {
                         Ok(cfg) => {
+                            download_mgr = Some(DownloadManager::new(cfg.clone()));
                             let scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
                             config = Some(cfg);
                             scene
@@ -147,10 +156,12 @@ pub fn run(
                 scene.update(elapsed);
                 scene.render(canvas, elapsed);
                 match scene.check_result() {
-                    LoadingOutcome::Done { games, source_idx, .. } => {
-                        active_scene = ActiveScene::Browser(
-                            GameBrowser::new(texture_creator, games, source_idx),
-                        );
+                    LoadingOutcome::Done { games, source, platform, source_idx, .. } => {
+                        if let Some(dm) = &download_mgr {
+                            active_scene = ActiveScene::Browser(
+                                GameBrowser::new(texture_creator, games, source, platform, source_idx, &my_games, dm),
+                            );
+                        }
                     }
                     LoadingOutcome::RefreshDone => {
                         if let Some(cfg) = &config {
@@ -175,10 +186,52 @@ pub fn run(
                     LoadingOutcome::None => {}
                 }
             }
+            ActiveScene::Browser(scene) => {
+                if let (Some(dm), ) = (&download_mgr, ) {
+                    scene.refresh_statuses(&my_games, dm);
+                }
+                scene.update(elapsed);
+                scene.render(canvas, elapsed);
+            }
             other => {
                 let scene = other.as_scene();
                 scene.update(elapsed);
                 scene.render(canvas, elapsed);
+            }
+        }
+
+        // Poll download events — add completed downloads to MyGames
+        if let Some(dm) = &download_mgr {
+            for event in dm.poll_events() {
+                match &event {
+                    crate::download::DownloadEvent::Completed { id } => {
+                        for entry in dm.statuses() {
+                            if entry.id == *id {
+                                eprintln!(
+                                    "[APP] Download #{} completed, adding '{}' to MyGames (platform={})",
+                                    id, entry.game_key, entry.platform
+                                );
+                                let result = my_games.add(crate::library::GameEntry {
+                                    key: entry.game_key.clone(),
+                                    source: entry.source_name.clone(),
+                                    platform: entry.platform.clone(),
+                                });
+                                match result {
+                                    Ok(()) => eprintln!("[APP] '{}' added to MyGames successfully", entry.file_name),
+                                    Err(e) => eprintln!("[APP] Failed to add '{}' to MyGames: {}", entry.file_name, e),
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    crate::download::DownloadEvent::Failed { id, error } => {
+                        eprintln!("[APP] Download #{} failed: {}", id, error);
+                    }
+                    crate::download::DownloadEvent::StateChanged { id, state } => {
+                        eprintln!("[APP] Download #{} state -> {}", id, state);
+                    }
+                    crate::download::DownloadEvent::Progress { .. } => {}
+                }
             }
         }
 

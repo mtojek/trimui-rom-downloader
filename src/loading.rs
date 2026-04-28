@@ -30,6 +30,8 @@ pub enum LoadingOutcome {
     None,
     Done {
         games: Vec<RemoteGame>,
+        source: Source,
+        platform: String,
         source_idx: usize,
     },
     RefreshDone,
@@ -46,6 +48,8 @@ pub struct LoadingScene<'a> {
     log_rx: Receiver<String>,
     cancel: Arc<AtomicBool>,
     handle: Option<JoinHandle<LoadingResult>>,
+    source: Source,
+    platform: String,
     pub source_idx: usize,
     pub refresh_all: bool,
     rendered_lines: Vec<(Texture<'a>, u32, u32)>,
@@ -68,6 +72,8 @@ impl<'a> LoadingScene<'a> {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_clone = cancel.clone();
 
+        let source_keep = source.clone();
+        let platform = catalog.platform.clone();
         let handle = std::thread::spawn(move || {
             LoadingResult::Single(Self::fetch_games(source, catalog, cache, log_tx, cancel_clone))
         });
@@ -86,6 +92,8 @@ impl<'a> LoadingScene<'a> {
             log_rx,
             cancel,
             handle: Some(handle),
+            source: source_keep,
+            platform,
             source_idx,
             refresh_all: false,
             rendered_lines: Vec::new(),
@@ -123,6 +131,15 @@ impl<'a> LoadingScene<'a> {
             log_rx,
             cancel,
             handle: Some(handle),
+            source: Source {
+                name: String::new(),
+                source_type: crate::config::SourceType::S3Archive,
+                endpoint: String::new(),
+                access_key: String::new(),
+                secret_key: String::new(),
+                catalogs: Vec::new(),
+            },
+            platform: String::new(),
             source_idx: 0,
             refresh_all: true,
             rendered_lines: Vec::new(),
@@ -268,6 +285,8 @@ impl<'a> LoadingScene<'a> {
                     Ok(LoadingResult::Single(Some(games))) => {
                         return LoadingOutcome::Done {
                             games,
+                            source: self.source.clone(),
+                            platform: self.platform.clone(),
                             source_idx: self.source_idx,
                         };
                     }

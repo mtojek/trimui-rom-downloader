@@ -9,10 +9,9 @@ const LIBRARY_FILE: &str = "mygames.yaml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameEntry {
+    pub key: String,
     pub source: String,
     pub platform: String,
-    pub key: String,
-    pub install_path: String,
 }
 
 #[derive(Debug)]
@@ -110,20 +109,9 @@ impl MyGames {
             return Ok(());
         }
 
-        // Find and remove entry, delete file from disk
-        if let Some(pos) = self.entries.iter().position(|e| {
-            e.source == source && e.platform == platform && e.key == key
-        }) {
-            let entry = self.entries.remove(pos);
-            let path = PathBuf::from(&entry.install_path);
-            if path.exists() {
-                if path.is_dir() {
-                    let _ = fs::remove_dir_all(&path);
-                } else {
-                    let _ = fs::remove_file(&path);
-                }
-            }
-        }
+        self.entries.retain(|e| {
+            !(e.source == source && e.platform == platform && e.key == key)
+        });
 
         self.save()
     }
@@ -144,10 +132,9 @@ mod tests {
 
     fn sample_entry(key: &str) -> GameEntry {
         GameEntry {
+            key: key.to_string(),
             source: "Internet Archive".to_string(),
             platform: PS.to_string(),
-            key: key.to_string(),
-            install_path: format!("/mnt/SDCARD/Roms/Sony PlayStation (PS)/{}", key),
         }
     }
 
@@ -217,16 +204,14 @@ mod tests {
     fn yaml_matches_golden_file() {
         let (mut lib, dir) = temp_library("golden");
         lib.add(GameEntry {
+            key: "Crash Bandicoot".to_string(),
             source: "Internet Archive".to_string(),
             platform: PS.to_string(),
-            key: "Crash Bandicoot".to_string(),
-            install_path: "/mnt/SDCARD/Roms/Sony PlayStation (PS)/Crash Bandicoot".to_string(),
         }).unwrap();
         lib.add(GameEntry {
+            key: "Spyro the Dragon".to_string(),
             source: "Internet Archive".to_string(),
             platform: PS.to_string(),
-            key: "Spyro the Dragon".to_string(),
-            install_path: "/mnt/SDCARD/Roms/Sony PlayStation (PS)/Spyro the Dragon".to_string(),
         }).unwrap();
 
         let actual = fs::read_to_string(dir.join("mygames.yaml")).unwrap();

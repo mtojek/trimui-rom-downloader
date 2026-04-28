@@ -15,12 +15,14 @@ pub struct RemoteGame {
 #[derive(Debug)]
 pub enum BackendError {
     ListFailed(String),
+    DownloadFailed(String),
 }
 
 impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BackendError::ListFailed(msg) => write!(f, "List failed: {}", msg),
+            BackendError::DownloadFailed(msg) => write!(f, "Download failed: {}", msg),
         }
     }
 }
@@ -32,6 +34,21 @@ pub trait SourceBackend: Send + Sync {
         log: &Sender<String>,
         cancel: &Arc<AtomicBool>,
     ) -> Result<Vec<RemoteGame>, BackendError>;
+
+    fn download_object(
+        &self,
+        key: &str,
+        dest: &std::path::Path,
+        offset: u64,
+        total_bytes: u64,
+        cancel: &Arc<AtomicBool>,
+        progress: &Sender<DownloadProgress>,
+    ) -> Result<(), BackendError>;
+}
+
+pub struct DownloadProgress {
+    pub bytes_downloaded: u64,
+    pub total_bytes: u64,
 }
 
 fn send_log(log: &Sender<String>, msg: String) {
@@ -40,107 +57,46 @@ fn send_log(log: &Sender<String>, msg: String) {
 
 pub fn create_backend(source: &Source) -> Result<Box<dyn SourceBackend>, BackendError> {
     match source.source_type {
-        SourceType::S3 => Ok(Box::new(S3Backend::new(source)?)),
+        SourceType::S3Archive => Ok(Box::new(IABackend::new(source))),
     }
 }
 
-struct S3Backend {
-    endpoint: String,
-    bucket_name: String,
+struct IABackend {
+    item: String,
     access_key: String,
     secret_key: String,
-    resolve_redirect: bool,
 }
 
-impl S3Backend {
-    fn new(source: &Source) -> Result<Self, BackendError> {
-        let (endpoint, bucket_name) = match source.endpoint.rfind('/') {
-            Some(pos) if pos > 8 => (
-                source.endpoint[..pos].to_string(),
-                source.endpoint[pos + 1..].to_string(),
-            ),
-            _ => {
-                return Err(BackendError::ListFailed(format!(
-                    "Invalid endpoint '{}', expected https://host/bucket",
-                    source.endpoint
-                )));
-            }
-        };
-
-        Ok(S3Backend {
-            endpoint,
-            bucket_name,
+impl IABackend {
+    fn new(source: &Source) -> Self {
+        IABackend {
+            item: source.endpoint.clone(),
             access_key: source.access_key.clone(),
             secret_key: source.secret_key.clone(),
-            resolve_redirect: source.options.resolve_redirect,
-        })
+        }
     }
 
-    fn credentials(&self) -> Result<s3::creds::Credentials, BackendError> {
-        s3::creds::Credentials::new(
-            Some(&self.access_key),
-            Some(&self.secret_key),
-            None,
-            None,
-            None,
-        )
-        .map_err(|e| BackendError::ListFailed(e.to_string()))
-    }
-
-    fn bucket_with_endpoint(&self, endpoint: &str) -> Result<s3::Bucket, BackendError> {
-        let region = s3::Region::Custom {
-            region: "us-east-1".to_string(),
-            endpoint: endpoint.to_string(),
-        };
-        let credentials = self.credentials()?;
-        let bucket = s3::Bucket::new(&self.bucket_name, region, credentials)
-            .map_err(|e| BackendError::ListFailed(e.to_string()))?
-            .with_path_style();
-        Ok(*bucket)
-    }
-
-    fn bucket(&self) -> Result<s3::Bucket, BackendError> {
-        self.bucket_with_endpoint(&self.endpoint)
-    }
-
-    fn resolve_endpoint(&self, log: &Sender<String>) -> Result<String, BackendError> {
-        let bucket = self.bucket()?;
-
-        let rt = tokio::runtime::Builder::new_current_thread()
+    fn make_runtime(&self) -> Result<tokio::runtime::Runtime, BackendError> {
+        tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| BackendError::ListFailed(e.to_string()))?;
-
-        // Use get_object to probe — returns raw ResponseData even on error/redirect
-        let response = rt.block_on(async {
-            bucket
-                .get_object("/")
-                .await
-                .map_err(|e| BackendError::ListFailed(e.to_string()))
-        })?;
-
-        let status = response.status_code();
-        send_log(log, format!("Redirect probe status: {}", status));
-
-        if status == 307 || status == 301 || status == 302 {
-            let body = String::from_utf8_lossy(response.bytes());
-
-            if let Some(start) = body.find("<Endpoint>") {
-                if let Some(end) = body.find("</Endpoint>") {
-                    let host = &body[start + 10..end];
-                    let resolved = format!("http://{}", host);
-                    send_log(log, format!("Resolved endpoint: {}", resolved));
-                    return Ok(resolved);
-                }
-            }
-        }
-
-        send_log(log, "No redirect needed".to_string());
-        Ok(self.endpoint.clone())
+            .map_err(|e| BackendError::ListFailed(e.to_string()))
     }
+
 }
 
-impl SourceBackend for S3Backend {
+#[derive(Deserialize)]
+struct IAMetadataResponse {
+    result: Vec<IAFileEntry>,
+}
+
+#[derive(Deserialize)]
+struct IAFileEntry {
+    name: String,
+    size: Option<String>,
+}
+
+impl SourceBackend for IABackend {
     fn list_all_objects(
         &self,
         catalog: &Catalog,
@@ -151,50 +107,181 @@ impl SourceBackend for S3Backend {
             return Err(BackendError::ListFailed("Cancelled".to_string()));
         }
 
-        let bucket = if self.resolve_redirect {
-            send_log(log, format!("Resolving redirect for {}", self.endpoint));
-            let resolved = self.resolve_endpoint(log)?;
-            if resolved != self.endpoint {
-                send_log(log, format!("Using resolved endpoint: {}", resolved));
-                self.bucket_with_endpoint(&resolved)?
-            } else {
-                self.bucket()?
-            }
-        } else {
-            self.bucket()?
-        };
+        let url = format!("https://archive.org/metadata/{}/files", self.item);
         let prefix = format!("{}/", catalog.path);
 
-        send_log(log, format!("Listing bucket='{}' prefix='{}'", self.bucket_name, prefix));
+        send_log(log, format!("Listing item='{}' prefix='{}'", self.item, prefix));
+
+        let rt = self.make_runtime()?;
+        let auth = format!("LOW {}:{}", self.access_key, self.secret_key);
+
+        let response = rt.block_on(async {
+            let client = reqwest::Client::new();
+            client.get(&url)
+                .header("Authorization", &auth)
+                .send()
+                .await
+                .map_err(|e| BackendError::ListFailed(e.to_string()))
+        })?;
+
+        let status = response.status().as_u16();
+        if status != 200 {
+            return Err(BackendError::ListFailed(
+                format!("Metadata API returned status {}", status)
+            ));
+        }
 
         if cancel.load(Ordering::Relaxed) {
             return Err(BackendError::ListFailed("Cancelled".to_string()));
         }
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| BackendError::ListFailed(e.to_string()))?;
-
-        let results = rt.block_on(async {
-            bucket
-                .list(prefix, None)
-                .await
+        let metadata: IAMetadataResponse = rt.block_on(async {
+            response.json().await
                 .map_err(|e| BackendError::ListFailed(e.to_string()))
         })?;
 
-        let mut games: Vec<RemoteGame> = Vec::new();
-        for result in &results {
-            for object in &result.contents {
-                games.push(RemoteGame {
-                    key: object.key.clone(),
-                    file_size: object.size,
-                });
-            }
-        }
+        let games: Vec<RemoteGame> = metadata.result.iter()
+            .filter(|f| f.name.starts_with(&prefix))
+            .filter_map(|f| {
+                let size = f.size.as_ref()?.parse::<u64>().ok()?;
+                Some(RemoteGame {
+                    key: f.name.clone(),
+                    file_size: size,
+                })
+            })
+            .collect();
 
         send_log(log, format!("Listed {} objects", games.len()));
         Ok(games)
     }
 
+    fn download_object(
+        &self,
+        key: &str,
+        dest: &std::path::Path,
+        offset: u64,
+        total_bytes: u64,
+        cancel: &Arc<AtomicBool>,
+        progress: &Sender<DownloadProgress>,
+    ) -> Result<(), BackendError> {
+        eprintln!("[IA] download_object: key='{}' dest='{}' total_bytes={}", key, dest.display(), total_bytes);
+
+        if total_bytes == 0 {
+            return Err(BackendError::DownloadFailed(
+                format!("File size is 0 for key '{}'", key)
+            ));
+        }
+
+        if offset >= total_bytes {
+            eprintln!("[IA] Already complete (offset {} >= total {})", offset, total_bytes);
+            let _ = progress.send(DownloadProgress { bytes_downloaded: total_bytes, total_bytes });
+            return Ok(());
+        }
+
+        // Percent-encode each path segment (preserve '/' separators)
+        let encoded_key: String = key.split('/')
+            .map(|seg| urlencoding::encode(seg))
+            .collect::<Vec<_>>()
+            .join("/");
+        let url = format!("https://archive.org/download/{}/{}", self.item, encoded_key);
+        eprintln!("[IA] Download URL: {}", url);
+
+        let rt = self.make_runtime()?;
+
+        // curl --location-trusted -H "Authorization: LOW key:secret" -H "Range: bytes=N-"
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
+
+        let auth = format!("LOW {}:{}", self.access_key, self.secret_key);
+
+        let mut current_url = url.clone();
+        let response = rt.block_on(async {
+            for hop in 0..10 {
+                let mut req = client.get(&current_url)
+                    .header("Authorization", &auth);
+                if offset > 0 {
+                    req = req.header("Range", format!("bytes={}-", offset));
+                }
+
+                let resp = req.send().await
+                    .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
+
+                let status = resp.status().as_u16();
+                eprintln!("[IA] Hop {} status={} url={}", hop, status, current_url);
+
+                if status == 301 || status == 302 || status == 307 || status == 308 {
+                    if let Some(loc) = resp.headers().get("location") {
+                        current_url = loc.to_str()
+                            .map_err(|e| BackendError::DownloadFailed(e.to_string()))?
+                            .to_string();
+                        continue;
+                    }
+                    return Err(BackendError::DownloadFailed(
+                        format!("Redirect {} without Location header", status)
+                    ));
+                }
+
+                return Ok(resp);
+            }
+            Err(BackendError::DownloadFailed("Too many redirects".to_string()))
+        })?;
+
+        let status = response.status().as_u16();
+        eprintln!("[IA] Final status: {}", status);
+
+        if status != 200 && status != 206 {
+            return Err(BackendError::DownloadFailed(
+                format!("Download returned status {} for '{}'", status, key)
+            ));
+        }
+
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
+        }
+
+        let mut downloaded = offset;
+        let mut file = if offset > 0 {
+            eprintln!("[IA] Resuming from byte {}", offset);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .append(true)
+                .open(dest)
+                .map_err(|e| BackendError::DownloadFailed(e.to_string()))?
+        } else {
+            std::fs::File::create(dest)
+                .map_err(|e| BackendError::DownloadFailed(e.to_string()))?
+        };
+
+        use std::io::Write;
+        use tokio_stream::StreamExt;
+
+        eprintln!("[IA] Streaming body ({} bytes remaining)", total_bytes - offset);
+        let mut stream = response.bytes_stream();
+
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(BackendError::DownloadFailed("Cancelled".to_string()));
+            }
+            let chunk = rt.block_on(async { stream.next().await });
+            match chunk {
+                Some(Ok(bytes)) => {
+                    file.write_all(&bytes)
+                        .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
+                    downloaded += bytes.len() as u64;
+                    let _ = progress.send(DownloadProgress { bytes_downloaded: downloaded, total_bytes });
+                }
+                Some(Err(e)) => return Err(BackendError::DownloadFailed(e.to_string())),
+                None => break,
+            }
+        }
+
+        file.sync_all()
+            .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
+
+        eprintln!("[IA] Download complete: {} bytes", downloaded);
+        Ok(())
+    }
 }

@@ -4,7 +4,11 @@ use sdl2::render::{Canvas, Texture, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 
 use crate::backend::RemoteGame;
+use crate::config::Source;
+use crate::download::{DownloadCommand, DownloadManager};
 use crate::input::InputAction;
+use crate::install_dir::InstallDirResolver;
+use crate::library::MyGames;
 use crate::scene::{Scene, SceneResult};
 use crate::text::TextRenderer;
 use crate::{WINDOW_HEIGHT, WINDOW_WIDTH};
@@ -13,7 +17,7 @@ const LETTERS: &[char] = &[
     '#', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
     'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
 ];
-const ROW1_LEN: usize = 14; // # A B C D E F G H I J K L M
+const ROW1_LEN: usize = 14;
 
 const MAX_VISIBLE: usize = 15;
 const LETTER_BAR_FONT_SIZE: f32 = 24.0;
@@ -30,6 +34,9 @@ const LEGEND_BOTTOM_MARGIN: i32 = 12;
 const NORMAL_COLOR: Color = Color::RGBA(200, 200, 200, 255);
 const SELECTED_COLOR: Color = Color::RGBA(255, 220, 80, 255);
 const DIM_COLOR: Color = Color::RGBA(100, 100, 100, 255);
+const INSTALLED_COLOR: Color = Color::RGBA(100, 200, 100, 255);
+const DOWNLOADING_COLOR: Color = Color::RGBA(100, 180, 255, 255);
+const FAILED_COLOR: Color = Color::RGBA(255, 80, 80, 255);
 const LEGEND_COLOR: Color = Color::RGBA(0, 0, 0, 220);
 
 pub enum BrowserOutcome {
@@ -47,12 +54,25 @@ struct RenderedGame<'a> {
 }
 
 struct GameEntry {
+    full_key: String,
+    file_name: String,
+    game_key: String,
     display_name: String,
     size_str: String,
+    file_size: u64,
+    installed: bool,
+    downloading: bool,
+    failed: bool,
+}
+
+fn file_stem(file_name: &str) -> &str {
+    file_name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(file_name)
 }
 
 pub struct GameBrowser<'a> {
     games: Vec<RemoteGame>,
+    source: Source,
+    platform: String,
     pub source_idx: usize,
     letter_idx: usize,
     selected: usize,
@@ -77,11 +97,14 @@ impl<'a> GameBrowser<'a> {
     pub fn new(
         texture_creator: &'a TextureCreator<WindowContext>,
         all_games: Vec<RemoteGame>,
+        source: Source,
+        platform: String,
         source_idx: usize,
+        my_games: &MyGames,
+        download_mgr: &DownloadManager,
     ) -> Self {
         let text = TextRenderer::new();
 
-        // Pre-render letter bar
         let mut letter_textures_normal = Vec::new();
         let mut letter_textures_active = Vec::new();
         let mut letter_textures_dim = Vec::new();
@@ -110,13 +133,15 @@ impl<'a> GameBrowser<'a> {
         }
 
         let legend = text.render_text(texture_creator,
-            "Menu: Exit    L1/R1: Letter    B: Back",
+            "Menu: Exit  L1/R1: Letter  X: Download  B: Back",
             LEGEND_FONT_SIZE,
             LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a);
         let lq = legend.query();
 
         let mut browser = GameBrowser {
             games: all_games,
+            source,
+            platform,
             source_idx,
             letter_idx: letter_has_games.iter().position(|&h| h).unwrap_or(0),
             selected: 0,
@@ -136,7 +161,7 @@ impl<'a> GameBrowser<'a> {
             legend_h: lq.height,
             texture_creator,
         };
-        browser.rebuild_game_list();
+        browser.rebuild_game_list(my_games, download_mgr);
         browser
     }
 
@@ -144,29 +169,62 @@ impl<'a> GameBrowser<'a> {
         LETTERS[self.letter_idx]
     }
 
-    fn rebuild_game_list(&mut self) {
+    fn rebuild_game_list(&mut self, my_games: &MyGames, download_mgr: &DownloadManager) {
         let letter = self.current_letter();
-        let mut filtered: Vec<(String, u64)> = self.games.iter().filter(|g| {
+        let mut filtered: Vec<(&RemoteGame,)> = self.games.iter().filter(|g| {
             let name = g.key.rsplit('/').next().unwrap_or(&g.key);
             if let Some(first) = name.chars().next() {
                 if letter == '#' { !first.is_ascii_alphabetic() } else { first.to_ascii_uppercase() == letter }
             } else { false }
-        }).map(|g| {
-            let name = g.key.rsplit('/').next().unwrap_or(&g.key).to_string();
-            (name, g.file_size)
-        }).collect::<Vec<_>>();
-        filtered.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+        }).map(|g| (g,)).collect();
+        filtered.sort_by(|a, b| {
+            let na = a.0.key.rsplit('/').next().unwrap_or(&a.0.key);
+            let nb = b.0.key.rsplit('/').next().unwrap_or(&b.0.key);
+            na.to_ascii_lowercase().cmp(&nb.to_ascii_lowercase())
+        });
 
-        self.filtered = filtered.into_iter().map(|(name, size)| {
+        self.filtered = filtered.into_iter().map(|(g,)| {
+            let file_name = g.key.rsplit('/').next().unwrap_or(&g.key).to_string();
+            let game_key = file_stem(&file_name).to_string();
+            let installed = my_games.is_installed(&self.source.name, &self.platform, &game_key);
+            let downloading = download_mgr.is_queued_or_active(&self.source.name, &self.platform, &game_key);
+            let failed = download_mgr.is_failed(&self.source.name, &self.platform, &game_key);
+            let display = truncate_name(&file_name, 68);
             GameEntry {
-                display_name: truncate_name(&name, 70),
-                size_str: format_size(size),
+                full_key: g.key.clone(),
+                file_name,
+                game_key,
+                display_name: display,
+                size_str: format_size(g.file_size),
+                file_size: g.file_size,
+                installed,
+                downloading,
+                failed,
             }
         }).collect();
 
         self.selected = 0;
         self.scroll_offset = 0;
         self.render_visible();
+    }
+
+    pub fn refresh_statuses(&mut self, my_games: &MyGames, download_mgr: &DownloadManager) {
+        let mut changed = false;
+        for entry in &mut self.filtered {
+            let installed = my_games.is_installed(&self.source.name, &self.platform, &entry.game_key);
+            let downloading = download_mgr.is_queued_or_active(&self.source.name, &self.platform, &entry.game_key);
+            let failed = download_mgr.is_failed(&self.source.name, &self.platform, &entry.game_key);
+            if installed != entry.installed || downloading != entry.downloading || failed != entry.failed {
+                entry.installed = installed;
+                entry.downloading = downloading;
+                entry.failed = failed;
+                entry.display_name = truncate_name(&entry.file_name, 68);
+                changed = true;
+            }
+        }
+        if changed {
+            self.render_visible();
+        }
     }
 
     fn render_visible(&mut self) {
@@ -177,8 +235,17 @@ impl<'a> GameBrowser<'a> {
         self.rendered_offset = self.scroll_offset;
 
         for entry in &self.filtered[self.scroll_offset..end] {
+            let name_color = if entry.failed {
+                FAILED_COLOR
+            } else if entry.installed {
+                INSTALLED_COLOR
+            } else if entry.downloading {
+                DOWNLOADING_COLOR
+            } else {
+                NORMAL_COLOR
+            };
             let name_tex = text.render_text(self.texture_creator, &entry.display_name, GAME_FONT_SIZE,
-                NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a);
+                name_color.r, name_color.g, name_color.b, name_color.a);
             let name_sel = text.render_text(self.texture_creator, &entry.display_name, GAME_FONT_SIZE,
                 SELECTED_COLOR.r, SELECTED_COLOR.g, SELECTED_COLOR.b, SELECTED_COLOR.a);
             let size_tex = text.render_text(self.texture_creator, &entry.size_str, GAME_FONT_SIZE,
@@ -199,19 +266,25 @@ impl<'a> GameBrowser<'a> {
         }
     }
 
-    pub fn handle_input(&mut self, action: InputAction) -> BrowserOutcome {
+    pub fn handle_input(
+        &mut self,
+        action: InputAction,
+        my_games: &mut MyGames,
+        download_mgr: &DownloadManager,
+        install_resolver: &InstallDirResolver,
+    ) -> BrowserOutcome {
         match action {
             InputAction::Left => {
                 if let Some(idx) = (0..self.letter_idx).rev().find(|&i| self.letter_has_games[i]) {
                     self.letter_idx = idx;
-                    self.rebuild_game_list();
+                    self.rebuild_game_list(my_games, download_mgr);
                 }
                 BrowserOutcome::None
             }
             InputAction::Right => {
                 if let Some(idx) = (self.letter_idx + 1..LETTERS.len()).find(|&i| self.letter_has_games[i]) {
                     self.letter_idx = idx;
-                    self.rebuild_game_list();
+                    self.rebuild_game_list(my_games, download_mgr);
                 }
                 BrowserOutcome::None
             }
@@ -231,6 +304,42 @@ impl<'a> GameBrowser<'a> {
                     if self.selected >= self.scroll_offset + MAX_VISIBLE {
                         self.scroll_offset = self.selected - MAX_VISIBLE + 1;
                         self.render_visible();
+                    }
+                }
+                BrowserOutcome::None
+            }
+            InputAction::Action => {
+                if let Some(entry) = self.filtered.get(self.selected) {
+                    if entry.installed {
+                        // Delete installed game from disk and library
+                        if let Some(game_dir) = install_resolver.game_dir(&self.platform, &entry.game_key) {
+                            if game_dir.exists() {
+                                eprintln!("[Browser] Deleting game dir: {}", game_dir.display());
+                                let _ = std::fs::remove_dir_all(&game_dir);
+                            }
+                        }
+                        let _ = my_games.remove(&self.source.name, &self.platform, &entry.game_key);
+                        self.refresh_statuses(my_games, download_mgr);
+                    } else if !entry.downloading {
+                        // Enqueue download — dest is platform_dir/game_key/file_name
+                        let game_dir = install_resolver
+                            .game_dir(&self.platform, &entry.game_key)
+                            .unwrap_or_else(|| {
+                                std::path::PathBuf::from("/mnt/SDCARD/Roms")
+                                    .join(&self.platform)
+                                    .join(&entry.game_key)
+                            });
+                        let dest = game_dir.join(&entry.file_name);
+                        download_mgr.send_command(DownloadCommand::Enqueue {
+                            source: self.source.clone(),
+                            platform: self.platform.clone(),
+                            key: entry.full_key.clone(),
+                            file_name: entry.file_name.clone(),
+                            game_key: entry.game_key.clone(),
+                            dest_path: dest,
+                            total_bytes: entry.file_size,
+                        });
+                        self.refresh_statuses(my_games, download_mgr);
                     }
                 }
                 BrowserOutcome::None
