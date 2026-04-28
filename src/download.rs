@@ -16,7 +16,7 @@ const MAX_ACTIVE: usize = 2;
 
 pub type DownloadId = u64;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DownloadState {
     Queued,
     Active,
@@ -37,7 +37,7 @@ impl std::fmt::Display for DownloadState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DownloadEntry {
     pub id: DownloadId,
     pub state: DownloadState,
@@ -49,16 +49,12 @@ pub struct DownloadEntry {
     pub dest_path: PathBuf,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
-    #[serde(skip)]
     pub speed: f64,
-    #[serde(skip)]
     pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub enum DownloadEvent {
-    StateChanged { id: DownloadId, state: DownloadState },
-    Progress { id: DownloadId, downloaded: u64, total: u64, speed: f64 },
     Completed { id: DownloadId },
     Failed { id: DownloadId, error: String },
 }
@@ -76,7 +72,6 @@ pub enum DownloadCommand {
     Pause(DownloadId),
     Resume(DownloadId),
     Cancel(DownloadId),
-    Shutdown,
 }
 
 struct ActiveDownload {
@@ -181,6 +176,21 @@ fn derive_dest_path(
     game_dir.join(file_name)
 }
 
+/// Find the bucket name for a given key by matching bucket paths in the source.
+fn find_bucket_name(source: &Source, key: &str) -> String {
+    for bucket in &source.buckets {
+        if bucket.path.is_empty() {
+            return bucket.name.clone();
+        }
+        let prefix = format!("{}/", bucket.path);
+        if key.starts_with(&prefix) {
+            return bucket.name.clone();
+        }
+    }
+    // Fallback: first bucket
+    source.buckets.first().map(|b| b.name.clone()).unwrap_or_default()
+}
+
 impl DownloadManager {
     pub fn new(config: Config, install_resolver: &InstallDirResolver) -> Self {
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<DownloadCommand>();
@@ -222,7 +232,7 @@ impl DownloadManager {
                             file_name,
                             game_key,
                             dest_path,
-                            total_bytes: 0, // resolved via HEAD in worker
+                            total_bytes: 0,
                             downloaded_bytes,
                             speed: 0.0,
                             error: None,
@@ -313,9 +323,10 @@ fn worker_loop(
         for (id, source_name, key) in entries_to_resolve {
             let source = config.sources.iter().find(|s| s.name == source_name);
             if let Some(source) = source {
-                match backend::create_backend(source) {
+                match backend::create_backend(source, &config) {
                     Ok(be) => {
-                        match be.head_object(&key) {
+                        let bucket_name = find_bucket_name(source, &key);
+                        match be.head_object(&bucket_name, &key) {
                             Ok(size) => {
                                 let mut q = queue.lock().unwrap();
                                 if let Some(entry) = q.find_mut(id) {
@@ -384,10 +395,6 @@ fn worker_loop(
                         error: None,
                     });
                     save_queue_locked(&q);
-                    let _ = event_tx.send(DownloadEvent::StateChanged {
-                        id,
-                        state: DownloadState::Queued,
-                    });
                 }
                 DownloadCommand::Pause(id) => {
                     eprintln!("[DL] #{} Pause requested", id);
@@ -400,10 +407,6 @@ fn worker_loop(
                             entry.state = DownloadState::Paused;
                             eprintln!("[DL] #{} '{}': Paused at {}", id, entry.file_name, format_bytes(entry.downloaded_bytes));
                             save_queue_locked(&q);
-                            let _ = event_tx.send(DownloadEvent::StateChanged {
-                                id,
-                                state: DownloadState::Paused,
-                            });
                         }
                     }
                 }
@@ -416,10 +419,6 @@ fn worker_loop(
                             entry.state = DownloadState::Queued;
                             entry.error = None;
                             save_queue_locked(&q);
-                            let _ = event_tx.send(DownloadEvent::StateChanged {
-                                id,
-                                state: DownloadState::Queued,
-                            });
                         }
                     }
                 }
@@ -447,10 +446,6 @@ fn worker_loop(
                         }
                         eprintln!("[DL] #{} '{}': Cancelled and removed from queue", id, file_name);
                     }
-                }
-                DownloadCommand::Shutdown => {
-                    eprintln!("[DL] Shutdown requested, stopping worker");
-                    return;
                 }
             }
         }
@@ -558,39 +553,31 @@ fn worker_loop(
                     id, file_name, format_bytes(total_bytes), format_bytes(offset), dest.display()
                 );
 
-                // Find the Source from config
                 let source = config
                     .sources
                     .iter()
                     .find(|s| s.name == source_name)
                     .cloned();
 
-                if source.is_none() {
-                    eprintln!("[DL] #{} '{}': ERROR — source '{}' not found in config!", id, file_name, source_name);
-                }
+                let config_clone = config.clone();
 
                 save_queue_locked(&q);
-                let _ = event_tx.send(DownloadEvent::StateChanged {
-                    id,
-                    state: DownloadState::Active,
-                });
 
                 let cancel = Arc::new(AtomicBool::new(false));
                 let cancel_clone = cancel.clone();
-                let event_tx_clone = event_tx.clone();
                 let queue_clone = queue.clone();
 
                 let handle = std::thread::spawn(move || {
                     download_worker(
                         id,
                         source,
+                        config_clone,
                         &key,
                         &file_name,
                         &dest,
                         offset,
                         total_bytes,
                         cancel_clone,
-                        event_tx_clone,
                         queue_clone,
                     )
                 });
@@ -610,40 +597,37 @@ fn worker_loop(
 fn download_worker(
     id: DownloadId,
     source: Option<Source>,
+    config: Config,
     key: &str,
     file_name: &str,
     dest: &std::path::Path,
     offset: u64,
     total_bytes: u64,
     cancel: Arc<AtomicBool>,
-    event_tx: Sender<DownloadEvent>,
     queue: Arc<Mutex<DownloadQueue>>,
 ) -> Result<(), BackendError> {
     let source = source.ok_or_else(|| {
         BackendError::DownloadFailed("Source not found in config".to_string())
     })?;
 
-    eprintln!("[DL] #{} '{}': Creating backend for source '{}'", id, file_name, source.name);
-    let be = backend::create_backend(&source)?;
-    eprintln!("[DL] #{} '{}': Backend created, starting download of key '{}'", id, file_name, key);
+    let bucket_name = find_bucket_name(&source, key);
+    eprintln!("[DL] #{} '{}': Creating backend for source '{}', bucket '{}'", id, file_name, source.name, bucket_name);
+    let be = backend::create_backend(&source, &config)?;
 
     let (progress_tx, progress_rx) = std::sync::mpsc::channel::<DownloadProgress>();
 
     let file_name_owned = file_name.to_string();
-    let event_tx2 = event_tx.clone();
     let queue2 = queue.clone();
     let progress_thread = std::thread::spawn(move || {
         let mut last_report = Instant::now();
         let mut last_bytes = offset;
         let mut last_log = Instant::now();
-        let mut last_ui_send = Instant::now();
         let mut current_speed: f64 = 0.0;
 
         while let Ok(p) = progress_rx.recv() {
             let now = Instant::now();
             let elapsed = now.duration_since(last_report).as_secs_f64();
 
-            // Update speed every 0.5s for stable readings
             if elapsed >= 0.5 {
                 let delta = p.bytes_downloaded.saturating_sub(last_bytes) as f64;
                 current_speed = delta / elapsed;
@@ -651,7 +635,6 @@ fn download_worker(
                 last_bytes = p.bytes_downloaded;
             }
 
-            // Update queue entry with current bytes and last known speed
             if let Ok(mut q) = queue2.lock() {
                 if let Some(entry) = q.find_mut(id) {
                     entry.downloaded_bytes = p.bytes_downloaded;
@@ -659,7 +642,6 @@ fn download_worker(
                 }
             }
 
-            // Log progress every 5 seconds
             if now.duration_since(last_log).as_secs() >= 5 {
                 let pct = if p.total_bytes > 0 {
                     (p.bytes_downloaded as f64 / p.total_bytes as f64 * 100.0) as u32
@@ -674,22 +656,10 @@ fn download_worker(
                 );
                 last_log = now;
             }
-
-            // Send UI events at ~4 Hz
-            let ui_elapsed = now.duration_since(last_ui_send).as_secs_f64();
-            if ui_elapsed >= 0.25 || p.bytes_downloaded == p.total_bytes {
-                last_ui_send = now;
-                let _ = event_tx2.send(DownloadEvent::Progress {
-                    id,
-                    downloaded: p.bytes_downloaded,
-                    total: p.total_bytes,
-                    speed: current_speed,
-                });
-            }
         }
     });
 
-    let result = be.download_object(key, dest, offset, total_bytes, &cancel, &progress_tx);
+    let result = be.download_object(&bucket_name, key, dest, offset, total_bytes, &cancel, &progress_tx);
 
     drop(progress_tx);
     let _ = progress_thread.join();

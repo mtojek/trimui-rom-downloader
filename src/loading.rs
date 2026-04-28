@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 
 use crate::backend::{self, RemoteGame};
 use crate::cache::CatalogCache;
-use crate::config::{Catalog, Config, Source};
+use crate::config::{Config, Source};
 use crate::input::InputAction;
 use crate::scene::{Scene, SceneResult};
 use crate::text::TextRenderer;
@@ -64,7 +64,7 @@ impl<'a> LoadingScene<'a> {
     pub fn new(
         texture_creator: &'a TextureCreator<WindowContext>,
         source: Source,
-        catalog: Catalog,
+        config: Config,
         cache: CatalogCache,
         source_idx: usize,
     ) -> Self {
@@ -73,9 +73,9 @@ impl<'a> LoadingScene<'a> {
         let cancel_clone = cancel.clone();
 
         let source_keep = source.clone();
-        let platform = catalog.platform.clone();
+        let platform = source.platform.clone();
         let handle = std::thread::spawn(move || {
-            LoadingResult::Single(Self::fetch_games(source, catalog, cache, log_tx, cancel_clone))
+            LoadingResult::Single(Self::fetch_games(source, config, cache, log_tx, cancel_clone))
         });
 
         let text = TextRenderer::new();
@@ -134,10 +134,9 @@ impl<'a> LoadingScene<'a> {
             source: Source {
                 name: String::new(),
                 source_type: crate::config::SourceType::S3Archive,
-                endpoint: String::new(),
-                access_key: String::new(),
-                secret_key: String::new(),
-                catalogs: Vec::new(),
+                credentials: String::new(),
+                platform: String::new(),
+                buckets: Vec::new(),
             },
             platform: String::new(),
             source_idx: 0,
@@ -163,24 +162,24 @@ impl<'a> LoadingScene<'a> {
                 return false;
             }
             let _ = log.send(format!("--- {} ---", source.name));
-            for catalog in &source.catalogs {
+            let be = match backend::create_backend(source, &config) {
+                Ok(be) => be,
+                Err(e) => {
+                    let _ = log.send(format!("ERROR: {}", e));
+                    continue;
+                }
+            };
+            for bucket in &source.buckets {
                 if cancel.load(Ordering::Relaxed) {
                     let _ = log.send("Cancelled".to_string());
                     return false;
                 }
-                let _ = log.send(format!("Refreshing: {}", catalog.path));
-                let _ = cache.invalidate(&source.name, catalog);
-                let be = match backend::create_backend(source) {
-                    Ok(be) => be,
-                    Err(e) => {
-                        let _ = log.send(format!("ERROR: {}", e));
-                        continue;
-                    }
-                };
-                match be.list_all_objects(catalog, &log, &cancel) {
+                let _ = log.send(format!("Refreshing: {}", bucket.name));
+                let _ = cache.invalidate(&source.name, bucket);
+                match be.list_bucket(bucket, &log, &cancel) {
                     Ok(games) => {
                         let _ = log.send(format!("Fetched {} games", games.len()));
-                        if let Err(e) = cache.save(&source.name, catalog, &games) {
+                        if let Err(e) = cache.save(&source.name, bucket, &games) {
                             let _ = log.send(format!("Cache save error: {}", e));
                         }
                     }
@@ -196,24 +195,14 @@ impl<'a> LoadingScene<'a> {
 
     fn fetch_games(
         source: Source,
-        catalog: Catalog,
+        config: Config,
         cache: CatalogCache,
         log: Sender<String>,
         cancel: Arc<AtomicBool>,
     ) -> Option<Vec<RemoteGame>> {
-        let _ = log.send(format!("Source: {}", source.name));
-        let _ = log.send(format!("Catalog: {} ({})", catalog.path, catalog.platform));
+        let _ = log.send(format!("Source: {} ({} buckets)", source.name, source.buckets.len()));
 
-        if !cache.is_stale(&source.name, &catalog) {
-            let _ = log.send("Loading from cache...".to_string());
-            let games = cache.load(&source.name, &catalog).unwrap_or_default();
-            let _ = log.send(format!("Loaded {} games from cache", games.len()));
-            return Some(games);
-        }
-
-        let _ = log.send("Cache miss, fetching from S3...".to_string());
-
-        let be = match backend::create_backend(&source) {
+        let be = match backend::create_backend(&source, &config) {
             Ok(be) => be,
             Err(e) => {
                 let _ = log.send(format!("ERROR: {}", e));
@@ -221,25 +210,46 @@ impl<'a> LoadingScene<'a> {
             }
         };
 
-        match be.list_all_objects(&catalog, &log, &cancel) {
-            Ok(games) => {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = log.send("Cancelled".to_string());
-                    return None;
-                }
-                let _ = log.send(format!("Fetched {} games", games.len()));
-                let _ = log.send("Saving to cache...".to_string());
-                if let Err(e) = cache.save(&source.name, &catalog, &games) {
-                    let _ = log.send(format!("Cache save error: {}", e));
-                }
-                let _ = log.send("Done!".to_string());
-                Some(games)
+        let mut all_games = Vec::new();
+
+        for bucket in &source.buckets {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = log.send("Cancelled".to_string());
+                return None;
             }
-            Err(e) => {
-                let _ = log.send(format!("ERROR: {}", e));
-                None
+
+            let _ = log.send(format!("Bucket: {}", bucket.name));
+
+            if !cache.is_stale(&source.name, bucket) {
+                let _ = log.send("Loading from cache...".to_string());
+                let games = cache.load(&source.name, bucket).unwrap_or_default();
+                let _ = log.send(format!("Loaded {} games from cache", games.len()));
+                all_games.extend(games);
+                continue;
+            }
+
+            let _ = log.send("Cache miss, fetching...".to_string());
+
+            match be.list_bucket(bucket, &log, &cancel) {
+                Ok(games) => {
+                    if cancel.load(Ordering::Relaxed) {
+                        let _ = log.send("Cancelled".to_string());
+                        return None;
+                    }
+                    let _ = log.send(format!("Fetched {} games", games.len()));
+                    if let Err(e) = cache.save(&source.name, bucket, &games) {
+                        let _ = log.send(format!("Cache save error: {}", e));
+                    }
+                    all_games.extend(games);
+                }
+                Err(e) => {
+                    let _ = log.send(format!("ERROR: {}", e));
+                }
             }
         }
+
+        let _ = log.send(format!("Total: {} games", all_games.len()));
+        Some(all_games)
     }
 
     fn render_log_textures(&mut self) {
@@ -263,7 +273,6 @@ impl<'a> LoadingScene<'a> {
     }
 
     pub fn check_result(&mut self) -> LoadingOutcome {
-        // Drain log messages
         while let Ok(msg) = self.log_rx.try_recv() {
             self.log_lines.push(msg);
             self.dirty = true;
@@ -274,7 +283,6 @@ impl<'a> LoadingScene<'a> {
             self.dirty = false;
         }
 
-        // Check if thread finished
         let finished = self.handle.as_ref().is_some_and(|h| h.is_finished());
         if finished {
             if let Some(handle) = self.handle.take() {
@@ -316,7 +324,6 @@ impl<'a> Scene for LoadingScene<'a> {
     }
 
     fn render(&mut self, canvas: &mut Canvas<Window>, _elapsed: u128) {
-        // Box
         let box_x = BOX_MARGIN;
         let box_y = BOX_MARGIN;
         let box_w = (WINDOW_WIDTH as i32 - 2 * BOX_MARGIN) as u32;
@@ -324,14 +331,12 @@ impl<'a> Scene for LoadingScene<'a> {
         canvas.set_draw_color(BOX_COLOR);
         canvas.fill_rect(Rect::new(box_x, box_y, box_w, box_h)).unwrap();
 
-        // Log lines
         for (i, (tex, w, h)) in self.rendered_lines.iter().enumerate() {
             let x = box_x + BOX_PADDING;
             let y = box_y + BOX_PADDING + (i as i32 * LOG_LINE_HEIGHT);
             canvas.copy(tex, None, Rect::new(x, y, *w, *h)).unwrap();
         }
 
-        // Legend
         let legend_x = (WINDOW_WIDTH as i32 - self.legend_w as i32) / 2;
         let legend_y = WINDOW_HEIGHT as i32 - self.legend_h as i32 - LEGEND_BOTTOM_MARGIN;
         canvas.copy(&self.legend_texture, None, Rect::new(legend_x, legend_y, self.legend_w, self.legend_h)).unwrap();

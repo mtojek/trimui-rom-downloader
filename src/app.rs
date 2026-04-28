@@ -66,12 +66,11 @@ pub fn run(
                 match &mut active_scene {
                     ActiveScene::Menu(scene) => {
                         match scene.handle_input(action) {
-                            MenuOutcome::OpenGameBrowser { source_idx, catalog_idx } => {
+                            MenuOutcome::OpenGameBrowser { source_idx } => {
                                 if let Some(cfg) = &config {
                                     let source = cfg.sources[source_idx].clone();
-                                    let catalog = source.catalogs[catalog_idx].clone();
                                     active_scene = ActiveScene::Loading(
-                                        LoadingScene::new(texture_creator, source, catalog, CatalogCache::new(), source_idx),
+                                        LoadingScene::new(texture_creator, source, cfg.clone(), CatalogCache::new(), source_idx),
                                     );
                                 }
                             }
@@ -258,10 +257,6 @@ pub fn run(
                     crate::download::DownloadEvent::Failed { id, error } => {
                         eprintln!("[APP] Download #{} failed: {}", id, error);
                     }
-                    crate::download::DownloadEvent::StateChanged { id, state } => {
-                        eprintln!("[APP] Download #{} state -> {}", id, state);
-                    }
-                    crate::download::DownloadEvent::Progress { .. } => {}
                 }
             }
         }

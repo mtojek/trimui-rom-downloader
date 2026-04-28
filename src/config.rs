@@ -1,10 +1,19 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub sources: Vec<Source>,
+    #[serde(default)]
+    pub credentials: HashMap<String, Credentials>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Credentials {
+    pub access_key: String,
+    pub secret_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -12,22 +21,22 @@ pub struct Source {
     pub name: String,
     #[serde(rename = "type")]
     pub source_type: SourceType,
-    pub endpoint: String,
-    pub access_key: String,
-    pub secret_key: String,
-    pub catalogs: Vec<Catalog>,
+    pub credentials: String,
+    pub platform: String,
+    pub buckets: Vec<Bucket>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Bucket {
+    pub name: String,
+    #[serde(default)]
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceType {
     S3Archive,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Catalog {
-    pub path: String,
-    pub platform: String,
 }
 
 #[derive(Debug)]
@@ -47,6 +56,12 @@ impl fmt::Display for ConfigError {
     }
 }
 
+impl Source {
+    pub fn resolve_credentials<'a>(&self, config: &'a Config) -> Option<&'a Credentials> {
+        config.credentials.get(&self.credentials)
+    }
+}
+
 impl Config {
     pub fn load(path: &str) -> Result<Self, ConfigError> {
         if !Path::new(path).exists() {
@@ -60,7 +75,16 @@ impl Config {
             serde_yaml::from_str(&contents).map_err(|e| ConfigError::ParseError(e.to_string()))?;
 
         config.validate()?;
-        Ok(config)
+        Ok(config.normalized())
+    }
+
+    fn normalized(mut self) -> Self {
+        for source in &mut self.sources {
+            for bucket in &mut source.buckets {
+                bucket.path = normalize_path(&bucket.path);
+            }
+        }
+        self
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -76,40 +100,34 @@ impl Config {
                     "Source name cannot be empty".to_string(),
                 ));
             }
-            if source.endpoint.is_empty() {
+            if source.credentials.is_empty() {
                 return Err(ConfigError::ValidationError(format!(
-                    "Source '{}': endpoint cannot be empty",
+                    "Source '{}': credentials cannot be empty",
                     source.name
                 )));
             }
-            if source.access_key.is_empty() {
+            if !self.credentials.contains_key(&source.credentials) {
                 return Err(ConfigError::ValidationError(format!(
-                    "Source '{}': access_key cannot be empty",
+                    "Source '{}': credentials '{}' not found",
+                    source.name, source.credentials
+                )));
+            }
+            if source.platform.is_empty() {
+                return Err(ConfigError::ValidationError(format!(
+                    "Source '{}': platform cannot be empty",
                     source.name
                 )));
             }
-            if source.secret_key.is_empty() {
+            if source.buckets.is_empty() {
                 return Err(ConfigError::ValidationError(format!(
-                    "Source '{}': secret_key cannot be empty",
+                    "Source '{}': at least one bucket is required",
                     source.name
                 )));
             }
-            if source.catalogs.is_empty() {
-                return Err(ConfigError::ValidationError(format!(
-                    "Source '{}': at least one catalog is required",
-                    source.name
-                )));
-            }
-            for catalog in &source.catalogs {
-                if catalog.path.is_empty() {
+            for bucket in &source.buckets {
+                if bucket.name.is_empty() {
                     return Err(ConfigError::ValidationError(format!(
-                        "Source '{}': catalog path cannot be empty",
-                        source.name
-                    )));
-                }
-                if catalog.platform.is_empty() {
-                    return Err(ConfigError::ValidationError(format!(
-                        "Source '{}': catalog platform cannot be empty",
+                        "Source '{}': bucket name cannot be empty",
                         source.name
                     )));
                 }
@@ -118,4 +136,13 @@ impl Config {
 
         Ok(())
     }
+}
+
+fn normalize_path(path: &str) -> String {
+    let trimmed = path.trim_matches('/');
+    trimmed
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
 }

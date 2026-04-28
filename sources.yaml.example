@@ -1,11 +1,23 @@
 sources:
-  - name: "Internet Archive"
+  - name: "PlayStation EU CHD"
     type: s3_archive
-    endpoint: "your-ia-item-identifier"
+    credentials: archive_org
+    platform: "PS"
+    buckets:
+      - name: "chd_psx_eur"
+        path: "CHD-PSX-EUR"
+  - name: "PlayStation Redump.org"
+    type: s3_archive
+    credentials: archive_org
+    platform: "PS"
+    buckets:
+      - name: "sony_playstation_part1"
+      - name: "sony_playstation_part2"
+      - name: "sony_playstation_part3"
+      - name: "sony_playstation_part4"
+      - name: "sony_playstation_part5"
+
+credentials:
+  archive_org:
     access_key: "your-access-key"
     secret_key: "your-secret-key"
-    catalogs:
-      - path: "fhw-nes-roms"
-        platform: "FC"
-      - path: "fhw-ps1-roms"
-        platform: "PS"
