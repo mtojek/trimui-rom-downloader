@@ -12,6 +12,7 @@ use crate::widget::{Menu, MenuAction, MenuItem};
 #[derive(Debug, Clone, PartialEq)]
 enum MenuTarget {
     BrowseSources,
+    MyGames,
     Source(usize),
     Catalog(usize, usize),
 }
@@ -28,6 +29,7 @@ enum State {
 pub enum MenuOutcome {
     None,
     OpenGameBrowser { source_idx: usize, catalog_idx: usize },
+    OpenMyGames,
     RefreshAll,
 }
 
@@ -63,7 +65,7 @@ impl<'a> MenuScene<'a> {
     fn main_items() -> Vec<MenuItem<MenuTarget>> {
         vec![
             MenuItem { label: "Browse Sources".to_string(), target: Some(MenuTarget::BrowseSources) },
-            MenuItem { label: "My Games".to_string(), target: None },
+            MenuItem { label: "My Games".to_string(), target: Some(MenuTarget::MyGames) },
         ]
     }
 
@@ -123,6 +125,9 @@ impl<'a> MenuScene<'a> {
                 MenuTarget::BrowseSources => {
                     self.transition(State::BrowseSources);
                     MenuOutcome::None
+                }
+                MenuTarget::MyGames => {
+                    MenuOutcome::OpenMyGames
                 }
                 MenuTarget::Source(idx) => {
                     let catalogs = &self.config.sources[idx].catalogs;

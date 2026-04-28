@@ -310,17 +310,9 @@ impl<'a> GameBrowser<'a> {
             }
             InputAction::Action => {
                 if let Some(entry) = self.filtered.get(self.selected) {
-                    if entry.installed {
-                        // Delete installed game from disk and library
-                        if let Some(game_dir) = install_resolver.game_dir(&self.platform, &entry.game_key) {
-                            if game_dir.exists() {
-                                eprintln!("[Browser] Deleting game dir: {}", game_dir.display());
-                                let _ = std::fs::remove_dir_all(&game_dir);
-                            }
-                        }
-                        let _ = my_games.remove(&self.source.name, &self.platform, &entry.game_key);
-                        self.refresh_statuses(my_games, download_mgr);
-                    } else if !entry.downloading {
+                    if entry.installed || entry.downloading || entry.failed {
+                        // Already installed/downloading/failed — no action
+                    } else {
                         // Enqueue download — dest is platform_dir/game_key/file_name
                         let game_dir = install_resolver
                             .game_dir(&self.platform, &entry.game_key)

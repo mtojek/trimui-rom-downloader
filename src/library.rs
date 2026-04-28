@@ -80,8 +80,10 @@ impl MyGames {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| LibraryError::IoError(e.to_string()))?;
         }
+        let mut sorted = self.entries.clone();
+        sorted.sort_by(|a, b| a.key.to_lowercase().cmp(&b.key.to_lowercase()));
         let yaml =
-            serde_yaml::to_string(&self.entries).map_err(|e| LibraryError::IoError(e.to_string()))?;
+            serde_yaml::to_string(&sorted).map_err(|e| LibraryError::IoError(e.to_string()))?;
         fs::write(&self.path, yaml).map_err(|e| LibraryError::IoError(e.to_string()))
     }
 

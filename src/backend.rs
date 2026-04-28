@@ -44,6 +44,8 @@ pub trait SourceBackend: Send + Sync {
         cancel: &Arc<AtomicBool>,
         progress: &Sender<DownloadProgress>,
     ) -> Result<(), BackendError>;
+
+    fn head_object(&self, key: &str) -> Result<u64, BackendError>;
 }
 
 pub struct DownloadProgress {
@@ -164,7 +166,7 @@ impl SourceBackend for IABackend {
         cancel: &Arc<AtomicBool>,
         progress: &Sender<DownloadProgress>,
     ) -> Result<(), BackendError> {
-        eprintln!("[IA] download_object: key='{}' dest='{}' total_bytes={}", key, dest.display(), total_bytes);
+        eprintln!("[IA] download_object: key='{}' dest='{}' offset={} total_bytes={}", key, dest.display(), offset, total_bytes);
 
         if total_bytes == 0 {
             return Err(BackendError::DownloadFailed(
@@ -172,8 +174,9 @@ impl SourceBackend for IABackend {
             ));
         }
 
+        // Already complete
         if offset >= total_bytes {
-            eprintln!("[IA] Already complete (offset {} >= total {})", offset, total_bytes);
+            eprintln!("[IA] File already complete ({} >= {}), skipping", offset, total_bytes);
             let _ = progress.send(DownloadProgress { bytes_downloaded: total_bytes, total_bytes });
             return Ok(());
         }
@@ -188,77 +191,117 @@ impl SourceBackend for IABackend {
 
         let rt = self.make_runtime()?;
 
-        // curl --location-trusted -H "Authorization: LOW key:secret" -H "Range: bytes=N-"
+        // curl --location-trusted -H "Authorization: LOW key:secret"
+        // Retry on 500/502/503 up to 5 times with 5s delay
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
 
         let auth = format!("LOW {}:{}", self.access_key, self.secret_key);
+        let use_range = offset > 0;
 
-        let mut current_url = url.clone();
-        let response = rt.block_on(async {
-            for hop in 0..10 {
-                let mut req = client.get(&current_url)
-                    .header("Authorization", &auth);
-                if offset > 0 {
-                    req = req.header("Range", format!("bytes={}-", offset));
-                }
+        let mut last_status = 0u16;
+        let mut response = None;
 
-                let resp = req.send().await
-                    .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
-
-                let status = resp.status().as_u16();
-                eprintln!("[IA] Hop {} status={} url={}", hop, status, current_url);
-
-                if status == 301 || status == 302 || status == 307 || status == 308 {
-                    if let Some(loc) = resp.headers().get("location") {
-                        current_url = loc.to_str()
-                            .map_err(|e| BackendError::DownloadFailed(e.to_string()))?
-                            .to_string();
-                        continue;
-                    }
-                    return Err(BackendError::DownloadFailed(
-                        format!("Redirect {} without Location header", status)
-                    ));
-                }
-
-                return Ok(resp);
+        for attempt in 0..5 {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(BackendError::DownloadFailed("Cancelled".to_string()));
             }
-            Err(BackendError::DownloadFailed("Too many redirects".to_string()))
-        })?;
+            if attempt > 0 {
+                eprintln!("[IA] Retry {}/5 after {}s (last status={})", attempt + 1, 5, last_status);
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
 
-        let status = response.status().as_u16();
-        eprintln!("[IA] Final status: {}", status);
+            let mut current_url = url.clone();
+            let resp = rt.block_on(async {
+                for hop in 0..10 {
+                    let mut req = client.get(&current_url)
+                        .header("Authorization", &auth);
+                    if use_range {
+                        req = req.header("Range", format!("bytes={}-", offset));
+                    }
+                    let resp = req.send()
+                        .await
+                        .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
 
-        if status != 200 && status != 206 {
+                    let status = resp.status().as_u16();
+                    eprintln!("[IA] Hop {} status={} url={}", hop, status, current_url);
+
+                    if status == 301 || status == 302 || status == 307 || status == 308 {
+                        if let Some(loc) = resp.headers().get("location") {
+                            current_url = loc.to_str()
+                                .map_err(|e| BackendError::DownloadFailed(e.to_string()))?
+                                .to_string();
+                            continue;
+                        }
+                        return Err(BackendError::DownloadFailed(
+                            format!("Redirect {} without Location header", status)
+                        ));
+                    }
+
+                    return Ok(resp);
+                }
+                Err(BackendError::DownloadFailed("Too many redirects".to_string()))
+            })?;
+
+            last_status = resp.status().as_u16();
+            eprintln!("[IA] Attempt {} final status: {}", attempt + 1, last_status);
+
+            if last_status == 200 || last_status == 206 {
+                response = Some(resp);
+                break;
+            }
+
+            // Retry on server errors
+            if last_status == 500 || last_status == 502 || last_status == 503 {
+                continue;
+            }
+
+            // Non-retryable error
             return Err(BackendError::DownloadFailed(
-                format!("Download returned status {} for '{}'", status, key)
+                format!("Download returned status {} for '{}'", last_status, key)
             ));
         }
+
+        let response = response.ok_or_else(|| {
+            BackendError::DownloadFailed(
+                format!("Download failed after 5 retries (last status={}) for '{}'", last_status, key)
+            )
+        })?;
+
+        // If we requested Range but got 200 (not 206), server doesn't support resume — start from scratch
+        let actual_offset = if use_range && last_status == 200 {
+            eprintln!("[IA] Server returned 200 instead of 206, restarting from scratch");
+            0u64
+        } else if last_status == 206 {
+            eprintln!("[IA] Resuming from offset {}", offset);
+            offset
+        } else {
+            0u64
+        };
 
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
         }
 
-        let mut downloaded = offset;
-        let mut file = if offset > 0 {
-            eprintln!("[IA] Resuming from byte {}", offset);
-            std::fs::OpenOptions::new()
-                .write(true)
-                .append(true)
-                .open(dest)
+        // Open file: append if resuming, create if starting fresh
+        let mut file = if actual_offset > 0 {
+            use std::fs::OpenOptions;
+            OpenOptions::new().append(true).open(dest)
                 .map_err(|e| BackendError::DownloadFailed(e.to_string()))?
         } else {
             std::fs::File::create(dest)
                 .map_err(|e| BackendError::DownloadFailed(e.to_string()))?
         };
 
+        let mut downloaded: u64 = actual_offset;
+
         use std::io::Write;
         use tokio_stream::StreamExt;
 
-        eprintln!("[IA] Streaming body ({} bytes remaining)", total_bytes - offset);
+        eprintln!("[IA] Streaming body ({} bytes remaining)", total_bytes - actual_offset);
         let mut stream = response.bytes_stream();
 
         loop {
@@ -281,7 +324,57 @@ impl SourceBackend for IABackend {
         file.sync_all()
             .map_err(|e| BackendError::DownloadFailed(e.to_string()))?;
 
-        eprintln!("[IA] Download complete: {} bytes", downloaded);
+        eprintln!("[IA] Download complete: {} bytes total", downloaded);
         Ok(())
+    }
+
+    fn head_object(&self, key: &str) -> Result<u64, BackendError> {
+        let encoded_key: String = key.split('/')
+            .map(|seg| urlencoding::encode(seg))
+            .collect::<Vec<_>>()
+            .join("/");
+        let url = format!("https://archive.org/download/{}/{}", self.item, encoded_key);
+        eprintln!("[IA] HEAD {}", url);
+
+        let rt = self.make_runtime()?;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| BackendError::ListFailed(e.to_string()))?;
+        let auth = format!("LOW {}:{}", self.access_key, self.secret_key);
+
+        rt.block_on(async {
+            let mut current_url = url;
+            for _hop in 0..10 {
+                let resp = client.head(&current_url)
+                    .header("Authorization", &auth)
+                    .send()
+                    .await
+                    .map_err(|e| BackendError::ListFailed(e.to_string()))?;
+
+                let status = resp.status().as_u16();
+                if status == 301 || status == 302 || status == 307 || status == 308 {
+                    if let Some(loc) = resp.headers().get("location") {
+                        current_url = loc.to_str()
+                            .map_err(|e| BackendError::ListFailed(e.to_string()))?
+                            .to_string();
+                        continue;
+                    }
+                    return Err(BackendError::ListFailed("Redirect without Location".to_string()));
+                }
+
+                if status == 200 {
+                    let len = resp.headers().get("content-length")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    eprintln!("[IA] HEAD result: {} bytes", len);
+                    return Ok(len);
+                }
+
+                return Err(BackendError::ListFailed(format!("HEAD returned status {}", status)));
+            }
+            Err(BackendError::ListFailed("Too many redirects".to_string()))
+        })
     }
 }

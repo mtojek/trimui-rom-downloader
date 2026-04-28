@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use crate::backend::{self, BackendError, DownloadProgress};
 use crate::config::{Config, Source};
+use crate::install_dir::InstallDirResolver;
 
 const DATA_DIR_NAME: &str = ".rom-downloader";
 const QUEUE_FILE: &str = "downloads.yaml";
@@ -136,8 +137,52 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PersistedState {
+    Downloading,
+    Paused,
+    Failed,
+    Done,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedEntry {
+    source_name: String,
+    platform: String,
+    key: String,
+    state: PersistedState,
+}
+
+fn derive_file_name(key: &str) -> String {
+    key.rsplit('/').next().unwrap_or(key).to_string()
+}
+
+fn derive_game_key(file_name: &str) -> String {
+    match file_name.rsplit_once('.') {
+        Some((name, _)) => name.to_string(),
+        None => file_name.to_string(),
+    }
+}
+
+fn derive_dest_path(
+    install_resolver: &InstallDirResolver,
+    platform: &str,
+    game_key: &str,
+    file_name: &str,
+) -> PathBuf {
+    let game_dir = install_resolver
+        .game_dir(platform, game_key)
+        .unwrap_or_else(|| {
+            PathBuf::from("/mnt/SDCARD/Roms")
+                .join(platform)
+                .join(game_key)
+        });
+    game_dir.join(file_name)
+}
+
 impl DownloadManager {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, install_resolver: &InstallDirResolver) -> Self {
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<DownloadCommand>();
         let (event_tx, event_rx) = std::sync::mpsc::channel::<DownloadEvent>();
 
@@ -148,19 +193,40 @@ impl DownloadManager {
             let mut q = queue.lock().unwrap();
             let path = queue_path();
             match load_queue() {
-                Ok(entries) if !entries.is_empty() => {
-                    eprintln!("[DL] Loaded {} entries from {}", entries.len(), path.display());
-                    let max_id = entries.iter().map(|e| e.id).max().unwrap_or(0);
-                    q.next_id = max_id + 1;
-                    for mut entry in entries {
-                        if entry.state == DownloadState::Active {
-                            eprintln!("[DL] #{} '{}': was Active, resetting to Queued (app restarted)", entry.id, entry.file_name);
-                            entry.state = DownloadState::Queued;
-                        }
-                        if entry.state == DownloadState::Queued || entry.state == DownloadState::Paused {
-                            eprintln!("[DL] #{} '{}': restored as {}", entry.id, entry.file_name, entry.state);
-                            q.entries.push_back(entry);
-                        }
+                Ok(persisted) if !persisted.is_empty() => {
+                    eprintln!("[DL] Loaded {} entries from {}", persisted.len(), path.display());
+                    for pe in persisted {
+                        let (state, state_label) = match pe.state {
+                            PersistedState::Downloading => (DownloadState::Queued, "Queued (was downloading)"),
+                            PersistedState::Paused => (DownloadState::Paused, "Paused"),
+                            PersistedState::Failed => (DownloadState::Failed, "Failed"),
+                            PersistedState::Done => (DownloadState::Completed, "Done"),
+                        };
+                        let file_name = derive_file_name(&pe.key);
+                        let game_key = derive_game_key(&file_name);
+                        let dest_path = derive_dest_path(install_resolver, &pe.platform, &game_key, &file_name);
+                        let downloaded_bytes = if dest_path.exists() {
+                            std::fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0)
+                        } else {
+                            0
+                        };
+                        let id = q.next_id;
+                        q.next_id += 1;
+                        eprintln!("[DL] #{} '{}': restored as {} ({}B on disk)", id, file_name, state_label, downloaded_bytes);
+                        q.entries.push_back(DownloadEntry {
+                            id,
+                            state,
+                            source_name: pe.source_name,
+                            platform: pe.platform,
+                            key: pe.key,
+                            file_name,
+                            game_key,
+                            dest_path,
+                            total_bytes: 0, // resolved via HEAD in worker
+                            downloaded_bytes,
+                            speed: 0.0,
+                            error: None,
+                        });
                     }
                 }
                 Ok(_) => {
@@ -234,6 +300,39 @@ fn worker_loop(
     config: Config,
 ) {
     let mut active_downloads: Vec<ActiveDownload> = Vec::new();
+
+    // Resolve total_bytes via HEAD for loaded entries
+    {
+        let entries_to_resolve: Vec<(DownloadId, String, String)> = {
+            let q = queue.lock().unwrap();
+            q.entries.iter()
+                .filter(|e| e.total_bytes == 0 && e.state != DownloadState::Completed)
+                .map(|e| (e.id, e.source_name.clone(), e.key.clone()))
+                .collect()
+        };
+        for (id, source_name, key) in entries_to_resolve {
+            let source = config.sources.iter().find(|s| s.name == source_name);
+            if let Some(source) = source {
+                match backend::create_backend(source) {
+                    Ok(be) => {
+                        match be.head_object(&key) {
+                            Ok(size) => {
+                                let mut q = queue.lock().unwrap();
+                                if let Some(entry) = q.find_mut(id) {
+                                    entry.total_bytes = size;
+                                    eprintln!("[DL] #{} '{}': HEAD resolved total_bytes={}", id, entry.file_name, size);
+                                }
+                            }
+                            Err(e) => eprintln!("[DL] #{}: HEAD failed for '{}': {}", id, key, e),
+                        }
+                    }
+                    Err(e) => eprintln!("[DL] #{}: Failed to create backend: {}", id, e),
+                }
+            } else {
+                eprintln!("[DL] #{}: Source '{}' not found in config, skipping HEAD", id, source_name);
+            }
+        }
+    }
 
     loop {
         // Process commands (non-blocking)
@@ -312,9 +411,10 @@ fn worker_loop(
                     eprintln!("[DL] #{} Resume requested", id);
                     let mut q = queue.lock().unwrap();
                     if let Some(entry) = q.find_mut(id) {
-                        if entry.state == DownloadState::Paused {
+                        if entry.state == DownloadState::Paused || entry.state == DownloadState::Failed {
+                            eprintln!("[DL] #{} '{}': {} -> re-queued", id, entry.file_name, entry.state);
                             entry.state = DownloadState::Queued;
-                            eprintln!("[DL] #{} '{}': Resumed, re-queued", id, entry.file_name);
+                            entry.error = None;
                             save_queue_locked(&q);
                             let _ = event_tx.send(DownloadEvent::StateChanged {
                                 id,
@@ -338,6 +438,12 @@ fn worker_loop(
                         if path.exists() {
                             eprintln!("[DL] #{} '{}': Deleting partial file {}", id, file_name, path.display());
                             let _ = std::fs::remove_file(&path);
+                        }
+                        if let Some(parent) = path.parent() {
+                            if parent.read_dir().map(|mut d| d.next().is_none()).unwrap_or(false) {
+                                eprintln!("[DL] #{} '{}': Removing empty directory {}", id, file_name, parent.display());
+                                let _ = std::fs::remove_dir(parent);
+                            }
                         }
                         eprintln!("[DL] #{} '{}': Cancelled and removed from queue", id, file_name);
                     }
@@ -428,23 +534,29 @@ fn worker_loop(
                 let total_bytes = entry.total_bytes;
                 let id = entry.id;
 
-                // Use actual file size on disk for resume offset (survives crash)
-                let offset = std::fs::metadata(&dest)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                entry.downloaded_bytes = offset;
-
-                if offset > 0 {
-                    eprintln!(
-                        "[DL] #{} '{}': Resuming from {} / {} (file exists on disk)",
-                        id, file_name, format_bytes(offset), format_bytes(total_bytes)
-                    );
+                // Resume: use existing file size as offset
+                let offset: u64 = if dest.exists() {
+                    match std::fs::metadata(&dest) {
+                        Ok(meta) => {
+                            let size = meta.len();
+                            eprintln!("[DL] #{} '{}': Resuming from {} / {}", id, file_name, format_bytes(size), format_bytes(total_bytes));
+                            entry.downloaded_bytes = size;
+                            size
+                        }
+                        Err(_) => {
+                            entry.downloaded_bytes = 0;
+                            0
+                        }
+                    }
                 } else {
-                    eprintln!(
-                        "[DL] #{} '{}': Starting download ({}) to {}",
-                        id, file_name, format_bytes(total_bytes), dest.display()
-                    );
-                }
+                    entry.downloaded_bytes = 0;
+                    0
+                };
+
+                eprintln!(
+                    "[DL] #{} '{}': Starting download ({}, offset={}) to {}",
+                    id, file_name, format_bytes(total_bytes), format_bytes(offset), dest.display()
+                );
 
                 // Find the Source from config
                 let source = config
@@ -524,25 +636,26 @@ fn download_worker(
         let mut last_report = Instant::now();
         let mut last_bytes = offset;
         let mut last_log = Instant::now();
+        let mut last_ui_send = Instant::now();
+        let mut current_speed: f64 = 0.0;
 
         while let Ok(p) = progress_rx.recv() {
             let now = Instant::now();
             let elapsed = now.duration_since(last_report).as_secs_f64();
-            let speed = if elapsed > 0.1 {
+
+            // Update speed every 0.5s for stable readings
+            if elapsed >= 0.5 {
                 let delta = p.bytes_downloaded.saturating_sub(last_bytes) as f64;
-                let s = delta / elapsed;
+                current_speed = delta / elapsed;
                 last_report = now;
                 last_bytes = p.bytes_downloaded;
-                s
-            } else {
-                0.0
-            };
+            }
 
-            // Update queue entry
+            // Update queue entry with current bytes and last known speed
             if let Ok(mut q) = queue2.lock() {
                 if let Some(entry) = q.find_mut(id) {
                     entry.downloaded_bytes = p.bytes_downloaded;
-                    entry.speed = speed;
+                    entry.speed = current_speed;
                 }
             }
 
@@ -557,18 +670,20 @@ fn download_worker(
                     "[DL] #{} '{}': {}% ({} / {}) @ {}/s",
                     id, file_name_owned, pct,
                     format_bytes(p.bytes_downloaded), format_bytes(p.total_bytes),
-                    format_bytes(speed as u64)
+                    format_bytes(current_speed as u64)
                 );
                 last_log = now;
             }
 
-            // Send UI events at ~10 Hz
-            if elapsed > 0.1 || p.bytes_downloaded == p.total_bytes {
+            // Send UI events at ~4 Hz
+            let ui_elapsed = now.duration_since(last_ui_send).as_secs_f64();
+            if ui_elapsed >= 0.25 || p.bytes_downloaded == p.total_bytes {
+                last_ui_send = now;
                 let _ = event_tx2.send(DownloadEvent::Progress {
                     id,
                     downloaded: p.bytes_downloaded,
                     total: p.total_bytes,
-                    speed,
+                    speed: current_speed,
                 });
             }
         }
@@ -597,25 +712,35 @@ fn queue_path() -> PathBuf {
 
 fn save_queue_locked(q: &DownloadQueue) {
     let path = queue_path();
-    let persistable: Vec<&DownloadEntry> = q
+    let persistable: Vec<PersistedEntry> = q
         .entries
         .iter()
-        .filter(|e| {
-            matches!(
-                e.state,
-                DownloadState::Queued | DownloadState::Active | DownloadState::Paused
-            )
+        .filter_map(|e| {
+            let state = match e.state {
+                DownloadState::Queued | DownloadState::Active => PersistedState::Downloading,
+                DownloadState::Paused => PersistedState::Paused,
+                DownloadState::Failed => PersistedState::Failed,
+                DownloadState::Completed => PersistedState::Done,
+            };
+            Some(PersistedEntry {
+                source_name: e.source_name.clone(),
+                platform: e.platform.clone(),
+                key: e.key.clone(),
+                state,
+            })
         })
         .collect();
+    let mut sorted = persistable;
+    sorted.sort_by(|a, b| a.key.to_lowercase().cmp(&b.key.to_lowercase()));
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(yaml) = serde_yaml::to_string(&persistable) {
+    if let Ok(yaml) = serde_yaml::to_string(&sorted) {
         let _ = std::fs::write(&path, yaml);
     }
 }
 
-fn load_queue() -> Result<Vec<DownloadEntry>, String> {
+fn load_queue() -> Result<Vec<PersistedEntry>, String> {
     let path = queue_path();
     if !path.exists() {
         return Ok(Vec::new());

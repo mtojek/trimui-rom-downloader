@@ -15,6 +15,7 @@ use crate::intro::IntroScene;
 use crate::library::MyGames;
 use crate::loading::{LoadingOutcome, LoadingScene};
 use crate::menu::{MenuOutcome, MenuScene};
+use crate::mygames::{MyGamesOutcome, MyGamesScene};
 use crate::scene::{Scene, SceneResult};
 
 const CONFIG_PATH: &str = "sources.yaml";
@@ -24,6 +25,7 @@ enum ActiveScene<'a> {
     Menu(MenuScene<'a>),
     Loading(LoadingScene<'a>),
     Browser(GameBrowser<'a>),
+    MyGames(MyGamesScene<'a>),
     Error(ErrorScene<'a>),
 }
 
@@ -34,6 +36,7 @@ impl<'a> ActiveScene<'a> {
             ActiveScene::Menu(s) => s,
             ActiveScene::Loading(s) => s,
             ActiveScene::Browser(s) => s,
+            ActiveScene::MyGames(s) => s,
             ActiveScene::Error(s) => s,
         }
     }
@@ -69,6 +72,13 @@ pub fn run(
                                     let catalog = source.catalogs[catalog_idx].clone();
                                     active_scene = ActiveScene::Loading(
                                         LoadingScene::new(texture_creator, source, catalog, CatalogCache::new(), source_idx),
+                                    );
+                                }
+                            }
+                            MenuOutcome::OpenMyGames => {
+                                if let Some(dm) = &download_mgr {
+                                    active_scene = ActiveScene::MyGames(
+                                        MyGamesScene::new(texture_creator, &my_games, dm),
                                     );
                                 }
                             }
@@ -116,6 +126,20 @@ pub fn run(
                             }
                         }
                     }
+                    ActiveScene::MyGames(scene) => {
+                        if let Some(dm) = &download_mgr {
+                            match scene.handle_input(action, &mut my_games, dm, &install_resolver) {
+                                MyGamesOutcome::Back => {
+                                    if let Some(cfg) = &config {
+                                        active_scene = ActiveScene::Menu(
+                                            MenuScene::new(texture_creator, cfg.clone()),
+                                        );
+                                    }
+                                }
+                                MyGamesOutcome::None => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -139,7 +163,7 @@ pub fn run(
                 if matches!(result, SceneResult::Next) {
                     active_scene = match Config::load(CONFIG_PATH) {
                         Ok(cfg) => {
-                            download_mgr = Some(DownloadManager::new(cfg.clone()));
+                            download_mgr = Some(DownloadManager::new(cfg.clone(), &install_resolver));
                             let scene = ActiveScene::Menu(MenuScene::new(texture_creator, cfg.clone()));
                             config = Some(cfg);
                             scene
@@ -187,8 +211,15 @@ pub fn run(
                 }
             }
             ActiveScene::Browser(scene) => {
-                if let (Some(dm), ) = (&download_mgr, ) {
+                if let Some(dm) = &download_mgr {
                     scene.refresh_statuses(&my_games, dm);
+                }
+                scene.update(elapsed);
+                scene.render(canvas, elapsed);
+            }
+            ActiveScene::MyGames(scene) => {
+                if let Some(dm) = &download_mgr {
+                    scene.refresh(&my_games, dm);
                 }
                 scene.update(elapsed);
                 scene.render(canvas, elapsed);

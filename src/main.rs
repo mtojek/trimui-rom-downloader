@@ -12,6 +12,7 @@ mod intro;
 mod library;
 mod loading;
 mod menu;
+mod mygames;
 mod scene;
 mod text;
 mod texture;
