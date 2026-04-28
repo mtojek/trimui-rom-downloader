@@ -87,9 +87,6 @@ pub struct GameBrowser<'a> {
     letter_widths: Vec<u32>,
     letter_heights: Vec<u32>,
     letter_has_games: Vec<bool>,
-    legend_texture: Texture<'a>,
-    legend_w: u32,
-    legend_h: u32,
     texture_creator: &'a TextureCreator<WindowContext>,
 }
 
@@ -132,12 +129,6 @@ impl<'a> GameBrowser<'a> {
             letter_textures_dim.push(dim);
         }
 
-        let legend = text.render_text(texture_creator,
-            "Menu: Exit  L1/R1: Letter  X: Download  B: Back",
-            LEGEND_FONT_SIZE,
-            LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a);
-        let lq = legend.query();
-
         let mut browser = GameBrowser {
             games: all_games,
             source,
@@ -156,9 +147,6 @@ impl<'a> GameBrowser<'a> {
             letter_widths,
             letter_heights,
             letter_has_games,
-            legend_texture: legend,
-            legend_w: lq.width,
-            legend_h: lq.height,
             texture_creator,
         };
         browser.rebuild_game_list(my_games, download_mgr);
@@ -419,10 +407,22 @@ impl<'a> Scene for GameBrowser<'a> {
             canvas.copy(&game.size_texture, None, Rect::new(size_x, y, game.size_w, game.size_h)).unwrap();
         }
 
-        // Legend
-        let legend_x = (WINDOW_WIDTH as i32 - self.legend_w as i32) / 2;
-        let legend_y = WINDOW_HEIGHT as i32 - self.legend_h as i32 - LEGEND_BOTTOM_MARGIN;
-        canvas.copy(&self.legend_texture, None, Rect::new(legend_x, legend_y, self.legend_w, self.legend_h)).unwrap();
+        // Legend — contextual based on selected entry
+        let legend_str = match self.filtered.get(self.selected) {
+            Some(entry) if entry.installed || entry.downloading || entry.failed => {
+                "Menu: Exit    L1/R1: Letter    B: Back"
+            }
+            _ => "Menu: Exit    L1/R1: Letter    X: Download    B: Back",
+        };
+        let text_r = TextRenderer::new();
+        let legend_tex = text_r.render_text(
+            self.texture_creator, legend_str, LEGEND_FONT_SIZE,
+            LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a,
+        );
+        let lq = legend_tex.query();
+        let legend_x = (WINDOW_WIDTH as i32 - lq.width as i32) / 2;
+        let legend_y = WINDOW_HEIGHT as i32 - lq.height as i32 - LEGEND_BOTTOM_MARGIN;
+        canvas.copy(&legend_tex, None, Rect::new(legend_x, legend_y, lq.width, lq.height)).unwrap();
     }
 }
 

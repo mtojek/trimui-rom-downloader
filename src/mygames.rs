@@ -69,9 +69,6 @@ pub struct MyGamesScene<'a> {
     title_texture: Texture<'a>,
     title_w: u32,
     title_h: u32,
-    legend_texture: Texture<'a>,
-    legend_w: u32,
-    legend_h: u32,
     confirm_delete: bool,
     confirm_selected: usize, // 0=No, 1=Yes
 }
@@ -89,12 +86,6 @@ impl<'a> MyGamesScene<'a> {
         );
         let tq = title_texture.query();
 
-        let legend_texture = text.render_text(
-            texture_creator, "B: Back    X: Pause/Resume    Y: Delete", LEGEND_FONT_SIZE,
-            LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a,
-        );
-        let lq = legend_texture.query();
-
         let mut scene = MyGamesScene {
             rows: Vec::new(),
             rendered: Vec::new(),
@@ -104,9 +95,6 @@ impl<'a> MyGamesScene<'a> {
             title_texture,
             title_w: tq.width,
             title_h: tq.height,
-            legend_texture,
-            legend_w: lq.width,
-            legend_h: lq.height,
             confirm_delete: false,
             confirm_selected: 0,
         };
@@ -430,10 +418,26 @@ impl<'a> Scene for MyGamesScene<'a> {
             }
         }
 
-        // Legend
-        let legend_y = WINDOW_HEIGHT as i32 - self.legend_h as i32 - 12;
-        let legend_x = (WINDOW_WIDTH as i32 - self.legend_w as i32) / 2;
-        canvas.copy(&self.legend_texture, None, Rect::new(legend_x, legend_y, self.legend_w, self.legend_h)).unwrap();
+        // Legend — contextual based on selected row
+        let legend_str = match self.rows.get(self.selected) {
+            Some(Row::Download(dl)) => match dl.state {
+                DownloadState::Active | DownloadState::Queued => "B: Back    X: Pause    Y: Delete",
+                DownloadState::Paused => "B: Back    X: Resume    Y: Delete",
+                DownloadState::Failed => "B: Back    X: Retry    Y: Delete",
+                _ => "B: Back    Y: Delete",
+            },
+            Some(Row::Installed(_)) => "B: Back    Y: Delete",
+            _ => "B: Back",
+        };
+        let text_r = TextRenderer::new();
+        let legend_texture = text_r.render_text(
+            self.texture_creator, legend_str, LEGEND_FONT_SIZE,
+            LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a,
+        );
+        let lq = legend_texture.query();
+        let legend_y = WINDOW_HEIGHT as i32 - lq.height as i32 - 12;
+        let legend_x = (WINDOW_WIDTH as i32 - lq.width as i32) / 2;
+        canvas.copy(&legend_texture, None, Rect::new(legend_x, legend_y, lq.width, lq.height)).unwrap();
 
         // Delete confirmation overlay
         if self.confirm_delete {
