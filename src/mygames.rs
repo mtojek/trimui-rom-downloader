@@ -29,6 +29,7 @@ const SELECTED_COLOR: Color = Color::RGBA(255, 220, 80, 255);
 const ACTIVE_COLOR: Color = Color::RGBA(100, 180, 255, 255);
 const PAUSED_COLOR: Color = Color::RGBA(255, 180, 50, 255);
 const FAILED_COLOR: Color = Color::RGBA(255, 80, 80, 255);
+const UNPACKING_COLOR: Color = Color::RGBA(200, 140, 255, 255);
 const QUEUED_COLOR: Color = Color::RGBA(160, 160, 160, 255);
 const INSTALLED_COLOR: Color = Color::RGBA(100, 200, 100, 255);
 const SEPARATOR_COLOR: Color = Color::RGBA(120, 120, 120, 180);
@@ -121,9 +122,20 @@ impl<'a> MyGamesScene<'a> {
         self.rendered.clear();
 
         let mut downloads: Vec<&DownloadEntry> = statuses.iter()
-            .filter(|e| matches!(e.state, DownloadState::Active | DownloadState::Queued | DownloadState::Paused | DownloadState::Failed))
+            .filter(|e| matches!(e.state, DownloadState::Active | DownloadState::Queued | DownloadState::Paused | DownloadState::Unpacking | DownloadState::Failed))
             .collect();
-        downloads.sort_by(|a, b| a.file_name.to_lowercase().cmp(&b.file_name.to_lowercase()));
+        downloads.sort_by(|a, b| {
+            let order = |s: &DownloadState| match s {
+                DownloadState::Active => 0,
+                DownloadState::Unpacking => 1,
+                DownloadState::Queued => 2,
+                DownloadState::Paused => 3,
+                DownloadState::Failed => 4,
+                _ => 5,
+            };
+            order(&a.state).cmp(&order(&b.state))
+                .then_with(|| a.file_name.to_lowercase().cmp(&b.file_name.to_lowercase()))
+        });
 
         let has_downloads = !downloads.is_empty();
         let installed = my_games.list();
@@ -166,12 +178,18 @@ impl<'a> MyGamesScene<'a> {
                 } else { 0 };
                 (ACTIVE_COLOR, format!("{}%  {}/s", pct, format_bytes(dl.speed as u64)))
             }
+            DownloadState::Unpacking => {
+                let pct = if dl.total_bytes > 0 {
+                    (dl.downloaded_bytes as f64 / dl.total_bytes as f64 * 100.0) as u32
+                } else { 0 };
+                (UNPACKING_COLOR, format!("{}% Unpacking", pct))
+            }
             DownloadState::Queued => (QUEUED_COLOR, "Queued".to_string()),
             DownloadState::Paused => {
                 let pct = if dl.total_bytes > 0 {
                     (dl.downloaded_bytes as f64 / dl.total_bytes as f64 * 100.0) as u32
                 } else { 0 };
-                (PAUSED_COLOR, format!("{}% [paused]", pct))
+                (PAUSED_COLOR, format!("{}% Paused", pct))
             }
             DownloadState::Failed => (FAILED_COLOR, "Failed".to_string()),
             _ => (NORMAL_COLOR, String::new()),
@@ -336,8 +354,7 @@ impl<'a> Scene for MyGamesScene<'a> {
 
     fn render(&mut self, canvas: &mut Canvas<Window>, _elapsed: u128) {
         let list_top = TOP_Y + self.title_h as i32 + 15;
-        let visible_count = MAX_VISIBLE.min(self.rows.len());
-        let content_height = if self.rows.is_empty() { 60 } else { visible_count as i32 * ROW_HEIGHT };
+        let content_height = MAX_VISIBLE as i32 * ROW_HEIGHT;
 
         // Dark background box
         let box_x = LEFT_MARGIN - BOX_PADDING_X;
@@ -385,7 +402,7 @@ impl<'a> Scene for MyGamesScene<'a> {
                             let rx = WINDOW_WIDTH as i32 - RIGHT_MARGIN - rendered.right_w as i32;
                             canvas.copy(&rendered.right_texture, None, Rect::new(rx, y, rendered.right_w, rendered.right_h)).unwrap();
 
-                            if matches!(dl.state, DownloadState::Active | DownloadState::Paused) && dl.total_bytes > 0 {
+                            if matches!(dl.state, DownloadState::Active | DownloadState::Paused | DownloadState::Unpacking) && dl.total_bytes > 0 {
                                 let bar_y = y + PROGRESS_BAR_Y_OFFSET;
                                 let bar_w = (WINDOW_WIDTH - LEFT_MARGIN as u32 - RIGHT_MARGIN as u32) as i32;
                                 let pct = dl.downloaded_bytes as f64 / dl.total_bytes as f64;
@@ -394,7 +411,11 @@ impl<'a> Scene for MyGamesScene<'a> {
                                 canvas.set_draw_color(BAR_BG_COLOR);
                                 canvas.fill_rect(Rect::new(LEFT_MARGIN, bar_y, bar_w as u32, PROGRESS_BAR_HEIGHT as u32)).unwrap();
                                 if filled > 0 {
-                                    let bar_color = if dl.state == DownloadState::Paused { PAUSED_COLOR } else { BAR_FG_COLOR };
+                                    let bar_color = match dl.state {
+                                        DownloadState::Paused => PAUSED_COLOR,
+                                        DownloadState::Unpacking => UNPACKING_COLOR,
+                                        _ => BAR_FG_COLOR,
+                                    };
                                     canvas.set_draw_color(bar_color);
                                     canvas.fill_rect(Rect::new(LEFT_MARGIN, bar_y, filled as u32, PROGRESS_BAR_HEIGHT as u32)).unwrap();
                                 }
@@ -424,6 +445,7 @@ impl<'a> Scene for MyGamesScene<'a> {
                 DownloadState::Active | DownloadState::Queued => "B: Back    X: Pause    Y: Delete",
                 DownloadState::Paused => "B: Back    X: Resume    Y: Delete",
                 DownloadState::Failed => "B: Back    X: Retry    Y: Delete",
+                DownloadState::Unpacking => "B: Back",
                 _ => "B: Back    Y: Delete",
             },
             Some(Row::Installed(_)) => "B: Back    Y: Delete",

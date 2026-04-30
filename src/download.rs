@@ -21,6 +21,7 @@ pub enum DownloadState {
     Queued,
     Active,
     Paused,
+    Unpacking,
     Completed,
     Failed,
 }
@@ -31,6 +32,7 @@ impl std::fmt::Display for DownloadState {
             DownloadState::Queued => write!(f, "Queued"),
             DownloadState::Active => write!(f, "Active"),
             DownloadState::Paused => write!(f, "Paused"),
+            DownloadState::Unpacking => write!(f, "Unpacking"),
             DownloadState::Completed => write!(f, "Completed"),
             DownloadState::Failed => write!(f, "Failed"),
         }
@@ -140,7 +142,6 @@ enum PersistedState {
     Downloading,
     Paused,
     Failed,
-    Done,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,7 +215,6 @@ impl DownloadManager {
                             PersistedState::Downloading => (DownloadState::Queued, "Queued (was downloading)"),
                             PersistedState::Paused => (DownloadState::Paused, "Paused"),
                             PersistedState::Failed => (DownloadState::Failed, "Failed"),
-                            PersistedState::Done => (DownloadState::Completed, "Done"),
                         };
                         let file_name = derive_file_name(&pe.key);
                         let game_key = derive_game_key(&file_name);
@@ -292,7 +292,7 @@ impl DownloadManager {
                 && e.game_key == game_key
                 && matches!(
                     e.state,
-                    DownloadState::Queued | DownloadState::Active | DownloadState::Paused
+                    DownloadState::Queued | DownloadState::Active | DownloadState::Paused | DownloadState::Unpacking
                 )
         })
     }
@@ -378,6 +378,7 @@ fn worker_loop(
                                 DownloadState::Queued
                                     | DownloadState::Active
                                     | DownloadState::Paused
+                                    | DownloadState::Unpacking
                             )
                     });
                     if duplicate {
@@ -470,7 +471,7 @@ fn worker_loop(
                 match ad.handle.join() {
                     Ok(Ok(())) => {
                         if let Some(entry) = q.find_mut(ad.id) {
-                            if entry.state == DownloadState::Active {
+                            if matches!(entry.state, DownloadState::Active | DownloadState::Unpacking) {
                                 entry.state = DownloadState::Completed;
                                 entry.downloaded_bytes = entry.total_bytes;
                                 eprintln!(
@@ -682,7 +683,14 @@ fn download_worker(
             eprintln!("[DL] #{} '{}': download_object completed successfully", id, file_name);
             if source.extract && file_name.to_lowercase().ends_with(".zip") {
                 eprintln!("[DL] #{} '{}': Extracting zip archive...", id, file_name);
-                if let Err(e) = extract_zip(dest) {
+                // Set state to Unpacking
+                if let Ok(mut q) = queue.lock() {
+                    if let Some(entry) = q.find_mut(id) {
+                        entry.state = DownloadState::Unpacking;
+                        entry.downloaded_bytes = 0;
+                    }
+                }
+                if let Err(e) = extract_zip(id, dest, &queue) {
                     eprintln!("[DL] #{} '{}': Extraction failed: {}", id, file_name, e);
                     return Err(BackendError::DownloadFailed(format!("Extraction failed: {}", e)));
                 }
@@ -696,11 +704,35 @@ fn download_worker(
     result
 }
 
-fn extract_zip(archive_path: &std::path::Path) -> Result<(), String> {
+fn extract_zip(
+    id: DownloadId,
+    archive_path: &std::path::Path,
+    queue: &Arc<Mutex<DownloadQueue>>,
+) -> Result<(), String> {
     let file = std::fs::File::open(archive_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
     let dest_dir = archive_path.parent().ok_or("No parent directory")?;
+
+    // Count total uncompressed size for progress
+    let mut total_size: u64 = 0;
+    for i in 0..archive.len() {
+        if let Ok(entry) = archive.by_index(i) {
+            if !entry.is_dir() {
+                total_size += entry.size();
+            }
+        }
+    }
+
+    // Set total_bytes for the progress bar
+    if let Ok(mut q) = queue.lock() {
+        if let Some(entry) = q.find_mut(id) {
+            entry.total_bytes = total_size;
+            entry.downloaded_bytes = 0;
+        }
+    }
+
+    let mut extracted: u64 = 0;
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
@@ -710,17 +742,33 @@ fn extract_zip(archive_path: &std::path::Path) -> Result<(), String> {
             continue;
         }
 
-        // Flatten: extract only the file name, ignore any directory structure inside the zip
         let file_name = name.rsplit('/').next().unwrap_or(&name);
         if file_name.is_empty() {
             continue;
         }
 
+        let entry_size = entry.size();
         let out_path = dest_dir.join(file_name);
-        eprintln!("[DL] Extracting: {} -> {}", name, out_path.display());
+        eprintln!("[DL] #{} Extracting: {} -> {} ({})", id, name, out_path.display(), format_bytes(entry_size));
 
         let mut outfile = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
-        std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
+
+        // Copy in chunks to update progress during large files
+        let mut buf = [0u8; 1024 * 1024];
+        loop {
+            let n = std::io::Read::read(&mut entry, &mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            std::io::Write::write_all(&mut outfile, &buf[..n]).map_err(|e| e.to_string())?;
+            extracted += n as u64;
+
+            if let Ok(mut q) = queue.lock() {
+                if let Some(dl) = q.find_mut(id) {
+                    dl.downloaded_bytes = extracted;
+                }
+            }
+        }
     }
 
     Ok(())
@@ -741,10 +789,10 @@ fn save_queue_locked(q: &DownloadQueue) {
         .iter()
         .filter_map(|e| {
             let state = match e.state {
-                DownloadState::Queued | DownloadState::Active => PersistedState::Downloading,
+                DownloadState::Queued | DownloadState::Active | DownloadState::Unpacking => PersistedState::Downloading,
                 DownloadState::Paused => PersistedState::Paused,
                 DownloadState::Failed => PersistedState::Failed,
-                DownloadState::Completed => PersistedState::Done,
+                DownloadState::Completed => return None,
             };
             Some(PersistedEntry {
                 source_name: e.source_name.clone(),
