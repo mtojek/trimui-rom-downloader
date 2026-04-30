@@ -413,9 +413,9 @@ impl<'a> Scene for GameBrowser<'a> {
         // Legend — contextual based on selected entry
         let legend_str = match self.filtered.get(self.selected) {
             Some(entry) if entry.installed || entry.downloading || entry.failed => {
-                "Menu: Exit    L1/R1: Letter    B: Back"
+                "Menu: Exit    L2/R2: Letter    B: Back"
             }
-            _ => "Menu: Exit    L1/R1: Letter    X: Download    B: Back",
+            _ => "Menu: Exit    L2/R2: Letter    X: Download    B: Back",
         };
         let text_r = TextRenderer::new();
         let legend_tex = text_r.render_text(

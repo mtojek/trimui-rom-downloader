@@ -101,8 +101,8 @@ impl InputHandler {
                     Button::RightShoulder => InputAction::Right,
                     Button::A => InputAction::Back,
                     Button::B => InputAction::Confirm,
-                    Button::X => InputAction::Action,
-                    Button::Y => InputAction::Refresh,
+                    Button::X => InputAction::Refresh,
+                    Button::Y => InputAction::Action,
                     _ => InputAction::None,
                 }
             }
@@ -112,6 +112,15 @@ impl InputHandler {
             } => {
                 println!("Joy button: which={} button={}", which, button_idx);
                 InputAction::None
+            }
+
+            Event::ControllerAxisMotion { axis, value, .. } => {
+                use sdl2::controller::Axis;
+                match axis {
+                    Axis::TriggerLeft if *value > 16000 => InputAction::Left,
+                    Axis::TriggerRight if *value > 16000 => InputAction::Right,
+                    _ => InputAction::None,
+                }
             }
 
             Event::JoyDeviceAdded { .. } | Event::ControllerDeviceAdded { .. } => {

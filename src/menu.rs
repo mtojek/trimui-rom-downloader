@@ -40,7 +40,7 @@ impl<'a> MenuScene<'a> {
     pub fn new(texture_creator: &'a TextureCreator<WindowContext>, config: Config) -> Self {
         let state = State::Main;
         let items = Self::main_items();
-        let menu = Menu::new(texture_creator, &items, "Menu: Exit       A: Confirm");
+        let menu = Menu::new(texture_creator, &items, "Menu: Exit    A: Confirm");
         MenuScene { state, menu, config, texture_creator }
     }
 
@@ -80,7 +80,7 @@ impl<'a> MenuScene<'a> {
 
     fn transition(&mut self, new_state: State) {
         let (items, legend) = match &new_state {
-            State::Main => (Self::main_items(), "Menu: Exit       A: Confirm"),
+            State::Main => (Self::main_items(), "Menu: Exit    A: Confirm"),
             State::BrowseSources => (self.source_items(), "Menu: Exit    B: Back    A: Confirm    Y: Refresh"),
         };
         self.state = new_state;
