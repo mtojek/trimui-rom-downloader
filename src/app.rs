@@ -57,12 +57,21 @@ pub fn run(
     let start = Instant::now();
 
     'running: loop {
+        let mut actions = Vec::new();
         for event in event_pump.poll_iter() {
             let action = input.handle_event(&event);
             if action == InputAction::Quit {
                 break 'running;
             }
             if action != InputAction::None {
+                actions.push(action);
+            }
+        }
+        let repeat = input.poll_repeat();
+        if repeat != InputAction::None {
+            actions.push(repeat);
+        }
+        for action in actions {
                 match &mut active_scene {
                     ActiveScene::Menu(scene) => {
                         match scene.handle_input(action) {
@@ -141,7 +150,6 @@ pub fn run(
                     }
                     _ => {}
                 }
-            }
         }
 
         let elapsed = start.elapsed().as_millis();
