@@ -15,6 +15,8 @@ pub enum InputAction {
     Down,
     Left,
     Right,
+    PageUp,
+    PageDown,
     Confirm,
     Back,
     Action,
@@ -79,7 +81,7 @@ impl InputHandler {
     }
 
     fn is_repeatable(action: InputAction) -> bool {
-        matches!(action, InputAction::Up | InputAction::Down | InputAction::Left | InputAction::Right)
+        matches!(action, InputAction::Up | InputAction::Down | InputAction::Left | InputAction::Right | InputAction::PageUp | InputAction::PageDown)
     }
 
     pub fn poll_repeat(&mut self) -> InputAction {
@@ -111,6 +113,8 @@ impl InputHandler {
                     Keycode::Escape => InputAction::Quit,
                     Keycode::Up => InputAction::Up,
                     Keycode::Down => InputAction::Down,
+                    Keycode::Left => InputAction::PageUp,
+                    Keycode::Right => InputAction::PageDown,
                     Keycode::O => InputAction::Left,
                     Keycode::P => InputAction::Right,
                     Keycode::Return => InputAction::Confirm,
@@ -131,6 +135,8 @@ impl InputHandler {
                 let released = match *key {
                     Keycode::Up => InputAction::Up,
                     Keycode::Down => InputAction::Down,
+                    Keycode::Left => InputAction::PageUp,
+                    Keycode::Right => InputAction::PageDown,
                     Keycode::O => InputAction::Left,
                     Keycode::P => InputAction::Right,
                     _ => InputAction::None,
@@ -150,6 +156,8 @@ impl InputHandler {
                     _ if *which == 0 && *button as i32 == 5 => InputAction::Quit,
                     Button::DPadUp => InputAction::Up,
                     Button::DPadDown => InputAction::Down,
+                    Button::DPadLeft => InputAction::PageUp,
+                    Button::DPadRight => InputAction::PageDown,
                     Button::LeftShoulder => InputAction::Left,
                     Button::RightShoulder => InputAction::Right,
                     Button::A => InputAction::Back,
@@ -171,6 +179,8 @@ impl InputHandler {
                 let released = match button {
                     Button::DPadUp => InputAction::Up,
                     Button::DPadDown => InputAction::Down,
+                    Button::DPadLeft => InputAction::PageUp,
+                    Button::DPadRight => InputAction::PageDown,
                     Button::LeftShoulder => InputAction::Left,
                     Button::RightShoulder => InputAction::Right,
                     _ => InputAction::None,

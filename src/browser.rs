@@ -298,6 +298,29 @@ impl<'a> GameBrowser<'a> {
                 }
                 BrowserOutcome::None
             }
+            InputAction::PageUp => {
+                if self.scroll_offset > 0 {
+                    self.scroll_offset = self.scroll_offset.saturating_sub(MAX_VISIBLE);
+                    self.selected = self.scroll_offset;
+                    self.render_visible();
+                } else if self.selected > 0 {
+                    self.selected = 0;
+                }
+                BrowserOutcome::None
+            }
+            InputAction::PageDown => {
+                if self.scroll_offset + MAX_VISIBLE < self.filtered.len() {
+                    self.scroll_offset += MAX_VISIBLE;
+                    if self.scroll_offset + MAX_VISIBLE > self.filtered.len() {
+                        self.scroll_offset = self.filtered.len().saturating_sub(MAX_VISIBLE);
+                    }
+                    self.selected = self.scroll_offset;
+                    self.render_visible();
+                } else if self.selected + 1 < self.filtered.len() {
+                    self.selected = self.filtered.len() - 1;
+                }
+                BrowserOutcome::None
+            }
             InputAction::Action => {
                 if let Some(entry) = self.filtered.get(self.selected) {
                     if entry.installed || entry.downloading || entry.failed {
@@ -413,9 +436,9 @@ impl<'a> Scene for GameBrowser<'a> {
         // Legend — contextual based on selected entry
         let legend_str = match self.filtered.get(self.selected) {
             Some(entry) if entry.installed || entry.downloading || entry.failed => {
-                "Menu: Exit    L2/R2: Letter    B: Back"
+                "Menu: Exit    L/R: Letter    B: Back"
             }
-            _ => "Menu: Exit    L2/R2: Letter    X: Download    B: Back",
+            _ => "Menu: Exit    L/R: Letter    X: Download    B: Back",
         };
         let text_r = TextRenderer::new();
         let legend_tex = text_r.render_text(

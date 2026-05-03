@@ -247,6 +247,35 @@ impl<'a> MyGamesScene<'a> {
         }
     }
 
+    fn page_up(&mut self) {
+        if self.rows.is_empty() { return; }
+        if self.scroll_offset > 0 {
+            self.scroll_offset = self.scroll_offset.saturating_sub(MAX_VISIBLE);
+            self.selected = self.scroll_offset;
+        } else {
+            self.selected = 0;
+        }
+        if matches!(self.rows.get(self.selected), Some(Row::Separator)) {
+            if self.selected + 1 < self.rows.len() { self.selected += 1; }
+        }
+    }
+
+    fn page_down(&mut self) {
+        if self.rows.is_empty() { return; }
+        if self.scroll_offset + MAX_VISIBLE < self.rows.len() {
+            self.scroll_offset += MAX_VISIBLE;
+            if self.scroll_offset + MAX_VISIBLE > self.rows.len() {
+                self.scroll_offset = self.rows.len().saturating_sub(MAX_VISIBLE);
+            }
+            self.selected = self.scroll_offset;
+        } else {
+            self.selected = self.rows.len() - 1;
+        }
+        if matches!(self.rows.get(self.selected), Some(Row::Separator)) {
+            if self.selected + 1 < self.rows.len() { self.selected += 1; }
+        }
+    }
+
     fn move_selection(&mut self, delta: i32) {
         if self.rows.is_empty() { return; }
         let new = (self.selected as i32 + delta).clamp(0, self.rows.len() as i32 - 1) as usize;
@@ -274,8 +303,8 @@ impl<'a> MyGamesScene<'a> {
         match action {
             InputAction::Up => { self.move_selection(-1); }
             InputAction::Down => { self.move_selection(1); }
-            InputAction::Left => { self.move_selection(-(MAX_VISIBLE as i32)); }
-            InputAction::Right => { self.move_selection(MAX_VISIBLE as i32); }
+            InputAction::Left | InputAction::PageUp => { self.page_up(); }
+            InputAction::Right | InputAction::PageDown => { self.page_down(); }
             InputAction::Back => { return MyGamesOutcome::Back; }
             InputAction::Action => {
                 // X = Pause/Resume/Retry for downloads
