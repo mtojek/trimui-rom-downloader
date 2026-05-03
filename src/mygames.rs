@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use sdl2::render::{Canvas, Texture, TextureCreator};
@@ -61,6 +63,19 @@ struct RenderedRow<'a> {
     sel_h: u32,
 }
 
+struct CachedTexture<'a> {
+    texture: Texture<'a>,
+    width: u32,
+    height: u32,
+}
+
+struct LegendCache<'a> {
+    texture: Texture<'a>,
+    width: u32,
+    height: u32,
+    key: String,
+}
+
 pub struct MyGamesScene<'a> {
     rows: Vec<Row>,
     rendered: Vec<Option<RenderedRow<'a>>>,
@@ -72,6 +87,12 @@ pub struct MyGamesScene<'a> {
     title_h: u32,
     confirm_delete: bool,
     confirm_selected: usize, // 0=No, 1=Yes
+    legend_cache: Option<LegendCache<'a>>,
+    empty_texture: Option<CachedTexture<'a>>,
+    dialog_title: Option<CachedTexture<'a>>,
+    dialog_no: [Option<CachedTexture<'a>>; 2],   // [normal, selected]
+    dialog_yes: [Option<CachedTexture<'a>>; 2],   // [normal, selected]
+    last_refresh: Instant,
 }
 
 impl<'a> MyGamesScene<'a> {
@@ -98,12 +119,29 @@ impl<'a> MyGamesScene<'a> {
             title_h: tq.height,
             confirm_delete: false,
             confirm_selected: 0,
+            legend_cache: None,
+            empty_texture: None,
+            dialog_title: None,
+            dialog_no: [None, None],
+            dialog_yes: [None, None],
+            last_refresh: Instant::now(),
         };
         scene.rebuild(my_games, download_mgr);
         scene
     }
 
+    pub fn refresh_if_needed(&mut self, my_games: &MyGames, download_mgr: &DownloadManager) {
+        if !download_mgr.has_active_downloads() {
+            return;
+        }
+        if self.last_refresh.elapsed().as_millis() < 500 {
+            return;
+        }
+        self.refresh(my_games, download_mgr);
+    }
+
     pub fn refresh(&mut self, my_games: &MyGames, download_mgr: &DownloadManager) {
+        self.last_refresh = Instant::now();
         let old_selected = self.selected;
         self.rebuild(my_games, download_mgr);
         if old_selected < self.rows.len() {
@@ -168,6 +206,7 @@ impl<'a> MyGamesScene<'a> {
                 self.selected -= 1;
             }
         }
+        self.update_legend();
     }
 
     fn render_download_row(&self, text: &TextRenderer, dl: &DownloadEntry) -> RenderedRow<'a> {
@@ -230,6 +269,77 @@ impl<'a> MyGamesScene<'a> {
         }
     }
 
+    fn current_legend_str(&self) -> &'static str {
+        match self.rows.get(self.selected) {
+            Some(Row::Download(dl)) => match dl.state {
+                DownloadState::Active | DownloadState::Queued => "B: Back    X: Pause    Y: Delete",
+                DownloadState::Paused => "B: Back    X: Resume    Y: Delete",
+                DownloadState::Failed => "B: Back    X: Retry    Y: Delete",
+                DownloadState::Unpacking => "B: Back",
+                _ => "B: Back    Y: Delete",
+            },
+            Some(Row::Installed(_)) => "B: Back    Y: Delete",
+            _ => "B: Back",
+        }
+    }
+
+    fn update_legend(&mut self) {
+        let legend_str = self.current_legend_str();
+        if let Some(ref cache) = self.legend_cache {
+            if cache.key == legend_str {
+                return;
+            }
+        }
+        let text = TextRenderer::new();
+        let tex = text.render_text(
+            self.texture_creator, legend_str, LEGEND_FONT_SIZE,
+            LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a,
+        );
+        let q = tex.query();
+        self.legend_cache = Some(LegendCache {
+            texture: tex,
+            width: q.width,
+            height: q.height,
+            key: legend_str.to_string(),
+        });
+    }
+
+    fn ensure_static_textures(&mut self) {
+        if self.empty_texture.is_none() {
+            let text = TextRenderer::new();
+            let tex = text.render_text(
+                self.texture_creator, "No games yet", FONT_SIZE,
+                NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a,
+            );
+            let q = tex.query();
+            self.empty_texture = Some(CachedTexture { texture: tex, width: q.width, height: q.height });
+        }
+        if self.dialog_title.is_none() {
+            let text = TextRenderer::new();
+            let tex = text.render_text(self.texture_creator, "Delete?", 36.0,
+                NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a);
+            let q = tex.query();
+            self.dialog_title = Some(CachedTexture { texture: tex, width: q.width, height: q.height });
+
+            let no_n = text.render_text(self.texture_creator, "No", 36.0, NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a);
+            let nq = no_n.query();
+            let no_s = text.render_text(self.texture_creator, "No", 36.0, SELECTED_COLOR.r, SELECTED_COLOR.g, SELECTED_COLOR.b, SELECTED_COLOR.a);
+
+            let yes_n = text.render_text(self.texture_creator, "Yes", 36.0, NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a);
+            let yq = yes_n.query();
+            let yes_s = text.render_text(self.texture_creator, "Yes", 36.0, SELECTED_COLOR.r, SELECTED_COLOR.g, SELECTED_COLOR.b, SELECTED_COLOR.a);
+
+            self.dialog_no = [
+                Some(CachedTexture { texture: no_n, width: nq.width, height: nq.height }),
+                Some(CachedTexture { texture: no_s, width: nq.width, height: nq.height }),
+            ];
+            self.dialog_yes = [
+                Some(CachedTexture { texture: yes_n, width: yq.width, height: yq.height }),
+                Some(CachedTexture { texture: yes_s, width: yq.width, height: yq.height }),
+            ];
+        }
+    }
+
     fn clamp_scroll(&mut self) {
         if self.rows.is_empty() {
             self.scroll_offset = 0;
@@ -258,6 +368,7 @@ impl<'a> MyGamesScene<'a> {
         if matches!(self.rows.get(self.selected), Some(Row::Separator)) {
             if self.selected + 1 < self.rows.len() { self.selected += 1; }
         }
+        self.update_legend();
     }
 
     fn page_down(&mut self) {
@@ -274,6 +385,7 @@ impl<'a> MyGamesScene<'a> {
         if matches!(self.rows.get(self.selected), Some(Row::Separator)) {
             if self.selected + 1 < self.rows.len() { self.selected += 1; }
         }
+        self.update_legend();
     }
 
     fn move_selection(&mut self, delta: i32) {
@@ -287,6 +399,7 @@ impl<'a> MyGamesScene<'a> {
             }
         }
         self.clamp_scroll();
+        self.update_legend();
     }
 
     pub fn handle_input(
@@ -412,15 +525,13 @@ impl<'a> Scene for MyGamesScene<'a> {
         let title_x = (WINDOW_WIDTH as i32 - self.title_w as i32) / 2;
         canvas.copy(&self.title_texture, None, Rect::new(title_x, TOP_Y, self.title_w, self.title_h)).unwrap();
 
+        self.ensure_static_textures();
+
         if self.rows.is_empty() {
-            let text = TextRenderer::new();
-            let empty = text.render_text(
-                self.texture_creator, "No games yet", FONT_SIZE,
-                NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a,
-            );
-            let eq = empty.query();
-            let x = (WINDOW_WIDTH as i32 - eq.width as i32) / 2;
-            canvas.copy(&empty, None, Rect::new(x, list_top + 20, eq.width, eq.height)).unwrap();
+            if let Some(ref empty) = self.empty_texture {
+                let x = (WINDOW_WIDTH as i32 - empty.width as i32) / 2;
+                canvas.copy(&empty.texture, None, Rect::new(x, list_top + 20, empty.width, empty.height)).unwrap();
+            }
         } else {
             let end = (self.scroll_offset + MAX_VISIBLE).min(self.rows.len());
             for (vi, ri) in (self.scroll_offset..end).enumerate() {
@@ -483,68 +594,47 @@ impl<'a> Scene for MyGamesScene<'a> {
             }
         }
 
-        // Legend — contextual based on selected row
-        let legend_str = match self.rows.get(self.selected) {
-            Some(Row::Download(dl)) => match dl.state {
-                DownloadState::Active | DownloadState::Queued => "B: Back    X: Pause    Y: Delete",
-                DownloadState::Paused => "B: Back    X: Resume    Y: Delete",
-                DownloadState::Failed => "B: Back    X: Retry    Y: Delete",
-                DownloadState::Unpacking => "B: Back",
-                _ => "B: Back    Y: Delete",
-            },
-            Some(Row::Installed(_)) => "B: Back    Y: Delete",
-            _ => "B: Back",
-        };
-        let text_r = TextRenderer::new();
-        let legend_texture = text_r.render_text(
-            self.texture_creator, legend_str, LEGEND_FONT_SIZE,
-            LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a,
-        );
-        let lq = legend_texture.query();
-        let legend_y = WINDOW_HEIGHT as i32 - lq.height as i32 - 12;
-        let legend_x = (WINDOW_WIDTH as i32 - lq.width as i32) / 2;
-        canvas.copy(&legend_texture, None, Rect::new(legend_x, legend_y, lq.width, lq.height)).unwrap();
+        // Legend (pre-rendered, cached)
+        if let Some(ref legend) = self.legend_cache {
+            let legend_y = WINDOW_HEIGHT as i32 - legend.height as i32 - 12;
+            let legend_x = (WINDOW_WIDTH as i32 - legend.width as i32) / 2;
+            canvas.copy(&legend.texture, None, Rect::new(legend_x, legend_y, legend.width, legend.height)).unwrap();
+        }
 
-        // Delete confirmation overlay
+        // Delete confirmation overlay (cached textures)
         if self.confirm_delete {
-            canvas.set_draw_color(Color::RGBA(0, 0, 0, 180));
-            canvas.fill_rect(Rect::new(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)).unwrap();
+            if let (Some(title), Some(no_tex), Some(yes_tex)) = (
+                &self.dialog_title,
+                &self.dialog_no[if self.confirm_selected == 0 { 1 } else { 0 }],
+                &self.dialog_yes[if self.confirm_selected == 1 { 1 } else { 0 }],
+            ) {
+                canvas.set_draw_color(Color::RGBA(0, 0, 0, 180));
+                canvas.fill_rect(Rect::new(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)).unwrap();
 
-            let text = TextRenderer::new();
-            let title = text.render_text(self.texture_creator, "Delete?", 36.0, NORMAL_COLOR.r, NORMAL_COLOR.g, NORMAL_COLOR.b, NORMAL_COLOR.a);
-            let tq = title.query();
+                let spacing = 50i32;
+                let total_h = title.height as i32 + spacing + no_tex.height as i32 + spacing + yes_tex.height as i32;
+                let start_y = (WINDOW_HEIGHT as i32 - total_h) / 2;
 
-            let no_color = if self.confirm_selected == 0 { SELECTED_COLOR } else { NORMAL_COLOR };
-            let yes_color = if self.confirm_selected == 1 { SELECTED_COLOR } else { NORMAL_COLOR };
+                let max_w = title.width.max(no_tex.width).max(yes_tex.width) as i32;
+                let dialog_w = (max_w + 80) as u32;
+                let dialog_h = (total_h + 40) as u32;
+                let dialog_x = (WINDOW_WIDTH as i32 - dialog_w as i32) / 2;
+                let dialog_y = start_y - 20;
 
-            let no_tex = text.render_text(self.texture_creator, "No", 36.0, no_color.r, no_color.g, no_color.b, no_color.a);
-            let nq = no_tex.query();
-            let yes_tex = text.render_text(self.texture_creator, "Yes", 36.0, yes_color.r, yes_color.g, yes_color.b, yes_color.a);
-            let yq = yes_tex.query();
+                canvas.set_draw_color(Color::RGBA(0, 0, 0, 230));
+                canvas.fill_rect(Rect::new(dialog_x, dialog_y, dialog_w, dialog_h)).unwrap();
 
-            let spacing = 50i32;
-            let total_h = tq.height as i32 + spacing + nq.height as i32 + spacing + yq.height as i32;
-            let start_y = (WINDOW_HEIGHT as i32 - total_h) / 2;
+                let tx = (WINDOW_WIDTH as i32 - title.width as i32) / 2;
+                canvas.copy(&title.texture, None, Rect::new(tx, start_y, title.width, title.height)).unwrap();
 
-            let max_w = tq.width.max(nq.width).max(yq.width) as i32;
-            let dialog_w = (max_w + 80) as u32;
-            let dialog_h = (total_h + 40) as u32;
-            let dialog_x = (WINDOW_WIDTH as i32 - dialog_w as i32) / 2;
-            let dialog_y = start_y - 20;
+                let ny = start_y + title.height as i32 + spacing;
+                let nx = (WINDOW_WIDTH as i32 - no_tex.width as i32) / 2;
+                canvas.copy(&no_tex.texture, None, Rect::new(nx, ny, no_tex.width, no_tex.height)).unwrap();
 
-            canvas.set_draw_color(Color::RGBA(0, 0, 0, 230));
-            canvas.fill_rect(Rect::new(dialog_x, dialog_y, dialog_w, dialog_h)).unwrap();
-
-            let tx = (WINDOW_WIDTH as i32 - tq.width as i32) / 2;
-            canvas.copy(&title, None, Rect::new(tx, start_y, tq.width, tq.height)).unwrap();
-
-            let ny = start_y + tq.height as i32 + spacing;
-            let nx = (WINDOW_WIDTH as i32 - nq.width as i32) / 2;
-            canvas.copy(&no_tex, None, Rect::new(nx, ny, nq.width, nq.height)).unwrap();
-
-            let yy = ny + nq.height as i32 + spacing;
-            let yx = (WINDOW_WIDTH as i32 - yq.width as i32) / 2;
-            canvas.copy(&yes_tex, None, Rect::new(yx, yy, yq.width, yq.height)).unwrap();
+                let yy = ny + no_tex.height as i32 + spacing;
+                let yx = (WINDOW_WIDTH as i32 - yes_tex.width as i32) / 2;
+                canvas.copy(&yes_tex.texture, None, Rect::new(yx, yy, yes_tex.width, yes_tex.height)).unwrap();
+            }
         }
     }
 }

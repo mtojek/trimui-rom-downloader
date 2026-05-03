@@ -53,6 +53,13 @@ struct RenderedGame<'a> {
     size_h: u32,
 }
 
+struct LegendCache<'a> {
+    texture: Texture<'a>,
+    width: u32,
+    height: u32,
+    is_download: bool,
+}
+
 struct GameEntry {
     full_key: String,
     bucket_name: String,
@@ -88,6 +95,8 @@ pub struct GameBrowser<'a> {
     letter_widths: Vec<u32>,
     letter_heights: Vec<u32>,
     letter_has_games: Vec<bool>,
+    legend: Option<LegendCache<'a>>,
+    last_refresh: std::time::Instant,
     texture_creator: &'a TextureCreator<WindowContext>,
 }
 
@@ -148,6 +157,8 @@ impl<'a> GameBrowser<'a> {
             letter_widths,
             letter_heights,
             letter_has_games,
+            legend: None,
+            last_refresh: std::time::Instant::now(),
             texture_creator,
         };
         browser.rebuild_game_list(my_games, download_mgr);
@@ -198,6 +209,17 @@ impl<'a> GameBrowser<'a> {
         self.render_visible();
     }
 
+    pub fn refresh_statuses_if_needed(&mut self, my_games: &MyGames, download_mgr: &DownloadManager) {
+        if !download_mgr.has_active_downloads() {
+            return;
+        }
+        if self.last_refresh.elapsed().as_millis() < 500 {
+            return;
+        }
+        self.last_refresh = std::time::Instant::now();
+        self.refresh_statuses(my_games, download_mgr);
+    }
+
     pub fn refresh_statuses(&mut self, my_games: &MyGames, download_mgr: &DownloadManager) {
         let mut changed = false;
         for entry in &mut self.filtered {
@@ -215,6 +237,36 @@ impl<'a> GameBrowser<'a> {
         if changed {
             self.render_visible();
         }
+    }
+
+    fn update_legend(&mut self) {
+        let is_download = match self.filtered.get(self.selected) {
+            Some(entry) if entry.installed || entry.downloading || entry.failed => false,
+            Some(_) => true,
+            None => true,
+        };
+        if let Some(ref legend) = self.legend {
+            if legend.is_download == is_download {
+                return;
+            }
+        }
+        let legend_str = if is_download {
+            "Menu: Exit    L/R: Letter    X: Download    B: Back"
+        } else {
+            "Menu: Exit    L/R: Letter    B: Back"
+        };
+        let text = TextRenderer::new();
+        let tex = text.render_text(
+            self.texture_creator, legend_str, LEGEND_FONT_SIZE,
+            LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a,
+        );
+        let q = tex.query();
+        self.legend = Some(LegendCache {
+            texture: tex,
+            width: q.width,
+            height: q.height,
+            is_download,
+        });
     }
 
     fn render_visible(&mut self) {
@@ -254,6 +306,7 @@ impl<'a> GameBrowser<'a> {
             });
             self.rendered_selected.push(name_sel);
         }
+        self.update_legend();
     }
 
     pub fn handle_input(
@@ -284,6 +337,8 @@ impl<'a> GameBrowser<'a> {
                     if self.selected < self.scroll_offset {
                         self.scroll_offset = self.selected;
                         self.render_visible();
+                    } else {
+                        self.update_legend();
                     }
                 }
                 BrowserOutcome::None
@@ -294,6 +349,8 @@ impl<'a> GameBrowser<'a> {
                     if self.selected >= self.scroll_offset + MAX_VISIBLE {
                         self.scroll_offset = self.selected - MAX_VISIBLE + 1;
                         self.render_visible();
+                    } else {
+                        self.update_legend();
                     }
                 }
                 BrowserOutcome::None
@@ -433,22 +490,12 @@ impl<'a> Scene for GameBrowser<'a> {
             canvas.copy(&game.size_texture, None, Rect::new(size_x, y, game.size_w, game.size_h)).unwrap();
         }
 
-        // Legend — contextual based on selected entry
-        let legend_str = match self.filtered.get(self.selected) {
-            Some(entry) if entry.installed || entry.downloading || entry.failed => {
-                "Menu: Exit    L/R: Letter    B: Back"
-            }
-            _ => "Menu: Exit    L/R: Letter    X: Download    B: Back",
-        };
-        let text_r = TextRenderer::new();
-        let legend_tex = text_r.render_text(
-            self.texture_creator, legend_str, LEGEND_FONT_SIZE,
-            LEGEND_COLOR.r, LEGEND_COLOR.g, LEGEND_COLOR.b, LEGEND_COLOR.a,
-        );
-        let lq = legend_tex.query();
-        let legend_x = (WINDOW_WIDTH as i32 - lq.width as i32) / 2;
-        let legend_y = WINDOW_HEIGHT as i32 - lq.height as i32 - LEGEND_BOTTOM_MARGIN;
-        canvas.copy(&legend_tex, None, Rect::new(legend_x, legend_y, lq.width, lq.height)).unwrap();
+        // Legend (pre-rendered, cached)
+        if let Some(ref legend) = self.legend {
+            let legend_x = (WINDOW_WIDTH as i32 - legend.width as i32) / 2;
+            let legend_y = WINDOW_HEIGHT as i32 - legend.height as i32 - LEGEND_BOTTOM_MARGIN;
+            canvas.copy(&legend.texture, None, Rect::new(legend_x, legend_y, legend.width, legend.height)).unwrap();
+        }
     }
 }
 

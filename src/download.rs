@@ -284,6 +284,16 @@ impl DownloadManager {
         self.queue.lock().unwrap().snapshot()
     }
 
+    pub fn has_active_downloads(&self) -> bool {
+        let q = self.queue.lock().unwrap();
+        q.entries.iter().any(|e| {
+            matches!(
+                e.state,
+                DownloadState::Queued | DownloadState::Active | DownloadState::Paused | DownloadState::Unpacking
+            )
+        })
+    }
+
     pub fn is_queued_or_active(&self, source_name: &str, platform: &str, game_key: &str) -> bool {
         let q = self.queue.lock().unwrap();
         q.entries.iter().any(|e| {

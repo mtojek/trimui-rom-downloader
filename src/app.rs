@@ -1,7 +1,7 @@
 use sdl2::pixels::Color;
 use sdl2::render::{Canvas, TextureCreator};
 use sdl2::video::{Window, WindowContext};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::background::Background;
 use crate::browser::{BrowserOutcome, GameBrowser};
@@ -58,13 +58,24 @@ pub fn run(
 
     'running: loop {
         let mut actions = Vec::new();
-        for event in event_pump.poll_iter() {
+        // Wait up to 16ms for an event instead of busy-polling
+        if let Some(event) = event_pump.wait_event_timeout(16) {
             let action = input.handle_event(&event);
             if action == InputAction::Quit {
                 break 'running;
             }
             if action != InputAction::None {
                 actions.push(action);
+            }
+            // Drain remaining events
+            for event in event_pump.poll_iter() {
+                let action = input.handle_event(&event);
+                if action == InputAction::Quit {
+                    break 'running;
+                }
+                if action != InputAction::None {
+                    actions.push(action);
+                }
             }
         }
         let repeat = input.poll_repeat();
@@ -219,14 +230,14 @@ pub fn run(
             }
             ActiveScene::Browser(scene) => {
                 if let Some(dm) = &download_mgr {
-                    scene.refresh_statuses(&my_games, dm);
+                    scene.refresh_statuses_if_needed(&my_games, dm);
                 }
                 scene.update(elapsed);
                 scene.render(canvas, elapsed);
             }
             ActiveScene::MyGames(scene) => {
                 if let Some(dm) = &download_mgr {
-                    scene.refresh(&my_games, dm);
+                    scene.refresh_if_needed(&my_games, dm);
                 }
                 scene.update(elapsed);
                 scene.render(canvas, elapsed);
@@ -239,8 +250,10 @@ pub fn run(
         }
 
         // Poll download events — add completed downloads to MyGames
+        let mut downloads_changed = false;
         if let Some(dm) = &download_mgr {
             for event in dm.poll_events() {
+                downloads_changed = true;
                 match &event {
                     crate::download::DownloadEvent::Completed { id } => {
                         for entry in dm.statuses() {
@@ -268,8 +281,22 @@ pub fn run(
                 }
             }
         }
+        if downloads_changed {
+            match &mut active_scene {
+                ActiveScene::MyGames(scene) => {
+                    if let Some(dm) = &download_mgr {
+                        scene.refresh(&my_games, dm);
+                    }
+                }
+                ActiveScene::Browser(scene) => {
+                    if let Some(dm) = &download_mgr {
+                        scene.refresh_statuses(&my_games, dm);
+                    }
+                }
+                _ => {}
+            }
+        }
 
         canvas.present();
-        std::thread::sleep(Duration::from_millis(16));
     }
 }
