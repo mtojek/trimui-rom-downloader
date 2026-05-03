@@ -168,17 +168,17 @@ fn derive_game_key(file_name: &str) -> String {
 fn derive_dest_path(
     install_resolver: &InstallDirResolver,
     platform: &str,
-    game_key: &str,
+    _game_key: &str,
     file_name: &str,
 ) -> PathBuf {
-    let game_dir = install_resolver
-        .game_dir(platform, game_key)
+    let platform_dir = install_resolver
+        .resolve(platform)
+        .map(|p| p.to_path_buf())
         .unwrap_or_else(|| {
             PathBuf::from("/mnt/SDCARD/Roms")
                 .join(platform)
-                .join(game_key)
         });
-    game_dir.join(file_name)
+    platform_dir.join(file_name)
 }
 
 /// Find the bucket name for a given key by matching bucket paths in the source.
@@ -704,6 +704,19 @@ fn download_worker(
     result
 }
 
+/// Check if a zip archive contains bin/cue files (multi-file disc image).
+fn zip_has_bin_cue(archive: &mut zip::ZipArchive<std::fs::File>) -> bool {
+    for i in 0..archive.len() {
+        if let Ok(entry) = archive.by_index_raw(i) {
+            let name_lower = entry.name().to_lowercase();
+            if name_lower.ends_with(".cue") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn extract_zip(
     id: DownloadId,
     archive_path: &std::path::Path,
@@ -712,7 +725,24 @@ fn extract_zip(
     let file = std::fs::File::open(archive_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
-    let dest_dir = archive_path.parent().ok_or("No parent directory")?;
+    let platform_dir = archive_path.parent().ok_or("No parent directory")?;
+
+    // If the zip contains bin/cue files, extract into a game subdirectory
+    let is_bin_cue = zip_has_bin_cue(&mut archive);
+    let dest_dir = if is_bin_cue {
+        // Derive game_key from archive filename (strip .zip extension)
+        let archive_stem = archive_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        let game_dir = platform_dir.join(archive_stem);
+        std::fs::create_dir_all(&game_dir).map_err(|e| e.to_string())?;
+        eprintln!("[DL] #{} bin/cue detected, extracting to subdirectory: {}", id, game_dir.display());
+        game_dir
+    } else {
+        eprintln!("[DL] #{} single-file archive, extracting flat to: {}", id, platform_dir.display());
+        platform_dir.to_path_buf()
+    };
 
     // Count total uncompressed size for progress
     let mut total_size: u64 = 0;

@@ -303,15 +303,15 @@ impl<'a> GameBrowser<'a> {
                     if entry.installed || entry.downloading || entry.failed {
                         // Already installed/downloading/failed — no action
                     } else {
-                        // Enqueue download — dest is platform_dir/game_key/file_name
-                        let game_dir = install_resolver
-                            .game_dir(&self.platform, &entry.game_key)
+                        // Enqueue download — dest is platform_dir/file_name (flat)
+                        let platform_dir = install_resolver
+                            .resolve(&self.platform)
+                            .map(|p| p.to_path_buf())
                             .unwrap_or_else(|| {
                                 std::path::PathBuf::from("/mnt/SDCARD/Roms")
                                     .join(&self.platform)
-                                    .join(&entry.game_key)
                             });
-                        let dest = game_dir.join(&entry.file_name);
+                        let dest = platform_dir.join(&entry.file_name);
                         download_mgr.send_command(DownloadCommand::Enqueue {
                             source: self.source.clone(),
                             platform: self.platform.clone(),

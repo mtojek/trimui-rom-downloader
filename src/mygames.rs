@@ -325,9 +325,24 @@ impl<'a> MyGamesScene<'a> {
                             }
                             Row::Installed(game) => {
                                 if let Some(game_dir) = install_resolver.game_dir(&game.platform, &game.key) {
-                                    if game_dir.exists() {
+                                    if game_dir.exists() && game_dir.is_dir() {
                                         let _ = std::fs::remove_dir_all(&game_dir);
                                         eprintln!("[MyGames] Deleted directory: {}", game_dir.display());
+                                    }
+                                }
+                                // Also remove flat files (non-subdirectory installs)
+                                if let Some(platform_dir) = install_resolver.resolve(&game.platform) {
+                                    if let Ok(entries) = std::fs::read_dir(platform_dir) {
+                                        for entry in entries.flatten() {
+                                            let name = entry.file_name().to_string_lossy().to_string();
+                                            if let Some(stem) = name.rsplit_once('.').map(|(s, _)| s) {
+                                                if stem == game.key && entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                                                    let path = entry.path();
+                                                    let _ = std::fs::remove_file(&path);
+                                                    eprintln!("[MyGames] Deleted file: {}", path.display());
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 let _ = my_games.remove(&game.source, &game.platform, &game.key);
