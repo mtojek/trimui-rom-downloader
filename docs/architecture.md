@@ -50,7 +50,7 @@ Intro ──▶ Menu ──▶ Loading ──▶ Browser
 
 | Thread | Purpose | Communication |
 |--------|---------|---------------|
-| Main | SDL2 event loop, rendering, scene management | Polls events from DownloadManager |
+| Main | SDL2 event loop (event-driven, `wait_event_timeout`), rendering, scene management | Polls events from DownloadManager |
 | Worker | Manages download queue, spawns download threads | Receives commands via mpsc channel |
 | Download (x2 max) | HTTP download + optional ZIP extraction | Updates shared queue via Arc<Mutex>, progress via mpsc |
 | Loading | Fetches game catalogs from backend | Sends log messages via mpsc, cancellable via AtomicBool |

@@ -11,14 +11,20 @@ All assets (sprites, background, font) are embedded at compile time via `include
 ## Window
 
 - Resolution: 1280×720
-- Frame rate: ~60 FPS (16ms sleep per frame)
+- Frame rate: ~60 FPS (event-driven via `wait_event_timeout(16)`)
 - Blend mode enabled for alpha transparency
 
 ## Text Rendering
 
 Text is rendered using fontdue's CPU rasterizer with Source Code Pro SemiBold font. Each text string is rasterized into an SDL2 texture in ABGR8888 format. Text color and alpha are configurable per render call.
 
-Scenes pre-render text textures where possible (menu items, letter bar) and re-render only when content changes.
+### Texture Caching
+
+Creating a `TextRenderer` parses the TTF font from scratch and `render_text()` rasterizes every glyph — this is expensive. Scenes **must** pre-render text textures and cache them, only re-rendering when content changes:
+
+- **Browser**: letter bar, game list entries, and legend are cached. Legend is re-rendered only when the selected entry type changes (downloadable vs installed).
+- **MyGames**: all row textures, legend, "No games yet" text, and delete confirmation dialog are cached. Legend updates only when the selected row type/state changes.
+- **Static textures** (titles, dialog buttons) are created once and reused for the lifetime of the scene.
 
 ## Scene Rendering
 
@@ -49,8 +55,17 @@ Timed sequence using elapsed milliseconds:
 │  Another Game.zip                 420 MB   │  with scroll
 │  ...                                       │
 ├────────────────────────────────────────────┤
-│  L2/R2: Letter    X: Download    B: Back   │  Legend
+│  L/R: Letter    X: Download    B: Back     │  Legend
 └────────────────────────────────────────────┘
+```
+
+### Controls
+
+- **D-Pad Up/Down**: move cursor one item
+- **D-Pad Left/Right**: page up/down (jump by one screen, cursor lands at top)
+- **L/R shoulders, L2/R2 triggers**: switch letter
+- **X (action)**: start download
+- **B**: go back
 ```
 
 ## My Games Layout
@@ -70,3 +85,27 @@ Timed sequence using elapsed milliseconds:
 ```
 
 Download rows include a progress bar below the text when active, paused, or unpacking.
+
+### Controls
+
+- **D-Pad Up/Down**: move cursor one item
+- **D-Pad Left/Right**: page up/down (jump by one screen, cursor lands at top)
+- **X (action)**: pause/resume/retry download
+- **Y (refresh)**: delete (with confirmation dialog)
+- **B**: go back
+
+## Performance
+
+### Event-Driven Main Loop
+
+The main loop uses `SDL_WaitEventTimeout(16)` instead of `poll + sleep`. When idle, SDL yields the CPU to the OS, resulting in near-zero CPU usage when no input or downloads are active.
+
+### Throttled Refresh
+
+Scenes that display download status (Browser, MyGames) use throttled refresh:
+
+- **No active downloads**: refresh is skipped entirely (zero mutex locks, zero iterations)
+- **Active downloads**: refresh runs at most every 500ms
+- **Download events** (completed/failed): trigger an immediate refresh regardless of throttle
+
+This avoids the cost of rebuilding textures 60 times per second when nothing has changed.

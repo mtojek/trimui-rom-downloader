@@ -21,8 +21,11 @@ DownloadCommand::Enqueue ──mpsc──▶ Worker Thread
          │ progress → Arc<Mutex<Queue>>
          ▼
     ┌───────────┐  (if source.extract && .zip)
-    │ Unpacking │──────────────▶ extract in 1MB chunks
-    └─────┬─────┘               delete .zip after
+    │ Unpacking │──────────────▶ scan for .cue → decide dest dir
+    └─────┬─────┘               extract in 1MB chunks, delete .zip
+          │
+          ├── bin/cue detected ──▶ extract to platform_dir/game_key/
+          └── single file      ──▶ extract to platform_dir/
           │
           ▼
     ┌───────────┐
@@ -37,7 +40,7 @@ Active ──▶ Paused (user pause, preserves partial file)
 Paused ──▶ Queued (user resume, resumes from file offset)
 Active ──▶ Failed (network error, retry available)
 Failed ──▶ Queued (user retry)
-Any    ──▶ Cancelled (removes entry + partial file + empty dir)
+Any    ──▶ Cancelled (removes entry + partial file; removes parent dir if empty)
 ```
 
 ## Catalog Loading
@@ -81,8 +84,8 @@ SDL2 Event
     ▼
 InputHandler::handle_event()
     │
-    ├── Keyboard: arrows, O/P, Return, Backspace, X, Y, Escape
-    ├── Controller buttons: DPad, A/B/X/Y, shoulders
+    ├── Keyboard: arrows, O/P, Left/Right, Return, Backspace, X, Y, Escape
+    ├── Controller buttons: DPad (Up/Down/Left/Right), A/B/X/Y, shoulders
     ├── Controller axes: TriggerLeft/Right (L2/R2)
     └── Button up events: stop key repeat
     │
@@ -91,5 +94,18 @@ InputAction enum ──▶ Active scene's handle_input()
     │
     ▼
 InputHandler::poll_repeat() ──▶ auto-repeat for held directional buttons
-                                (300ms delay, 50ms interval)
+                                and page up/down (300ms delay, 50ms interval)
 ```
+
+### Input Actions
+
+| Action | Controller | Keyboard | Usage |
+|--------|-----------|----------|-------|
+| Up/Down | D-Pad Up/Down | Arrow Up/Down | Move cursor |
+| PageUp/PageDown | D-Pad Left/Right | Arrow Left/Right | Jump one page |
+| Left/Right | L/R shoulders, L2/R2 | O/P | Switch letter (browser) |
+| Action | Y | X | Download / Pause / Resume |
+| Refresh | X | Y | Delete |
+| Confirm | B | Return | Confirm |
+| Back | A | Backspace | Go back |
+| Quit | Menu button | Escape | Exit app |

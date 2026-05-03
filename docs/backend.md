@@ -52,12 +52,34 @@ Currently one implementation: `IABackend` (Internet Archive). The trait allows a
 When `source.extract = true` and the downloaded file is a `.zip`:
 
 1. Download completes → state changes to `Unpacking`
-2. Total uncompressed size calculated for progress bar
-3. Files extracted in 1MB chunks with per-chunk progress updates
-4. Files are flattened (directory structure inside ZIP is ignored)
-5. Archive deleted after successful extraction
+2. Archive is scanned for `.cue` files to detect bin/cue disc images
+3. Total uncompressed size calculated for progress bar
+4. Files extracted in 1MB chunks with per-chunk progress updates
+5. Directory structure inside ZIP is flattened (only file names kept)
+6. Archive deleted after successful extraction
 
-This handles bin/cue PlayStation games distributed as ZIP archives.
+### Extraction Destination
+
+- **bin/cue archives** (ZIP contains `.cue` file): extracted into a game subdirectory (`platform_dir/game_key/`), since bin/cue games consist of multiple related files
+- **All other archives**: extracted flat into the platform directory (`platform_dir/`), no subdirectory created
+
+## File Installation Layout
+
+Downloaded files are placed directly in the platform ROM directory:
+
+```
+/mnt/SDCARD/Roms/
+├── Nintendo Entertainment System (FC)/
+│   ├── Game1.nes                    ← single file, flat
+│   └── Game2.nes
+├── Sony PlayStation (PS)/
+│   ├── Game1.chd                    ← single file, flat
+│   └── Game2/                       ← bin/cue, subdirectory
+│       ├── Game2.bin
+│       └── Game2.cue
+```
+
+Previously all games were placed in their own subdirectory. Now only bin/cue games (extracted from ZIP) get a subdirectory. Single files (`.chd`, `.nes`, `.gba`, etc.) and non-bin/cue ZIP contents are placed directly in the platform directory.
 
 ## Caching
 
